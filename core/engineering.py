@@ -285,24 +285,21 @@ ENGINEERING_PROBLEMS: Dict[str, Dict] = {
         'function': spring_design,
         'bounds': [(0.05, 2.0), (0.25, 1.3), (2.0, 15.0)],
         'objective': spring_design_objective,
-        'dim': 3,
-        'optimal': 0.012665,
+        'dim': 3
     },
     'Pressure Vessel': {
         'problem': PRESSURE_VESSEL_PROBLEM,
         'function': pressure_vessel,
         'objective': pressure_vessel_objective,
         'bounds': [(0.0625, 99 * 0.0625), (0.0625, 99 * 0.0625), (10, 200), (10, 200)],
-        'dim': 4,
-        'optimal': 5885.332,
+        'dim': 4
     },
     'Welded Beam': {
         'problem': WELDED_BEAM_PROBLEM,  # Changed from None
         'function': welded_beam,
         'objective': welded_beam_objective,
         'bounds': [(0.1, 2.0), (0.1, 10.0), (0.1, 10.0), (0.1, 2.0)],
-        'dim': 4,
-        'optimal': 1.724852,
+        'dim': 4
     },
     'Speed Reducer': {
         'problem': SPEED_REDUCER_PROBLEM,  # Changed from None
@@ -310,7 +307,6 @@ ENGINEERING_PROBLEMS: Dict[str, Dict] = {
         'objective': speed_reducer_objective,
         'bounds': [(2.6, 3.6), (0.7, 0.8), (17, 28), (7.3, 8.3),
                    (7.3, 8.3), (2.9, 3.9), (5.0, 5.5)],
-        'dim': 7,
-        'optimal': 2994.471,
+        'dim': 7
     }
 }
