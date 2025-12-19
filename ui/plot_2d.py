@@ -1,6 +1,8 @@
 import numpy as np
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout,
-                             QPushButton, QLabel, QSpinBox)
+                             QPushButton, QLabel, QSpinBox, QSlider,
+                             QGroupBox)
+from PyQt6.QtCore import Qt, QTimer
 import pyqtgraph as pg
 from core.honey_badger import HoneyBadgerAlgorithm, HBAParams
 
@@ -14,48 +16,102 @@ class Plot2DWindow(QWidget):
         self.func_name = func_name
 
         self.setWindowTitle(f"2D HBA - {func_name}")
-        self.setGeometry(150, 150, 800, 600)
+        self.setGeometry(150, 150, 900, 700)
 
         self.init_ui()
         self.setup_plot()
         self.setup_algorithm()
+
+        self.animation_timer = QTimer()
+        self.animation_timer.timeout.connect(self.step_optimization)
+        self.is_animating = False
 
     def init_ui(self):
         layout = QVBoxLayout()
 
         top_layout = QHBoxLayout()
 
-        self.btn_run = QPushButton("Run Optimization")
-        self.btn_run.clicked.connect(self.run_optimization)
-        top_layout.addWidget(self.btn_run)
+        self.btn_run_full = QPushButton("Run Full")
+        self.btn_run_full.clicked.connect(self.run_full_optimization)
+        top_layout.addWidget(self.btn_run_full)
+
+        self.btn_step = QPushButton("Step (1 Iter)")
+        self.btn_step.clicked.connect(self.step_optimization)
+        top_layout.addWidget(self.btn_step)
+
+        self.btn_play = QPushButton("▶ Play")
+        self.btn_play.clicked.connect(self.toggle_animation)
+        top_layout.addWidget(self.btn_play)
 
         self.btn_reset = QPushButton("Reset")
         self.btn_reset.clicked.connect(self.reset)
         top_layout.addWidget(self.btn_reset)
 
+        top_layout.addStretch(1)
+
         top_layout.addWidget(QLabel("Population:"))
         self.spin_pop = QSpinBox()
-        self.spin_pop.setRange(10, 100)
-        self.spin_pop.setValue(30)
+        self.spin_pop.setRange(5, 100)
+        self.spin_pop.setValue(20)
         top_layout.addWidget(self.spin_pop)
 
-        top_layout.addWidget(QLabel("Iterations:"))
+        top_layout.addWidget(QLabel("Max Iter:"))
         self.spin_iter = QSpinBox()
-        self.spin_iter.setRange(100, 2000)
-        self.spin_iter.setValue(500)
+        self.spin_iter.setRange(10, 2000)
+        self.spin_iter.setValue(100)
         top_layout.addWidget(self.spin_iter)
 
         layout.addLayout(top_layout)
+
+        speed_group = QGroupBox("Simulation Speed")
+        speed_layout = QHBoxLayout()
+
+        speed_layout.addWidget(QLabel("Slow"))
+        self.speed_slider = QSlider(Qt.Orientation.Horizontal)
+        self.speed_slider.setRange(1, 100)  # 1-100 ms
+        self.speed_slider.setValue(50)  # Default 50ms
+        self.speed_slider.valueChanged.connect(self.update_speed)
+        speed_layout.addWidget(self.speed_slider)
+
+        speed_layout.addWidget(QLabel("Fast"))
+        self.speed_label = QLabel("50 ms")
+        speed_layout.addWidget(self.speed_label)
+
+        speed_group.setLayout(speed_layout)
+        layout.addWidget(speed_group)
+
+        plot_layout = QHBoxLayout()
 
         self.plot_widget = pg.PlotWidget()
         self.plot_widget.setBackground('w')
         self.plot_widget.setLabel('left', 'Y')
         self.plot_widget.setLabel('bottom', 'X')
         self.plot_widget.showGrid(x=True, y=True, alpha=0.3)
-        layout.addWidget(self.plot_widget)
+        plot_layout.addWidget(self.plot_widget, 2)
 
-        self.status_label = QLabel("Ready")
-        layout.addWidget(self.status_label)
+        info_widget = QWidget()
+        info_layout = QVBoxLayout(info_widget)
+
+        self.iter_label = QLabel("Iteration: 0/0")
+        self.iter_label.setStyleSheet("font-weight: bold;")
+        info_layout.addWidget(self.iter_label)
+
+        self.best_label = QLabel("Best Fitness: N/A")
+        info_layout.addWidget(self.best_label)
+
+        self.solution_label = QLabel("Best Solution: N/A")
+        info_layout.addWidget(self.solution_label)
+
+        self.state_label = QLabel("Phase: Initialized")
+        info_layout.addWidget(self.state_label)
+
+        self.intensity_label = QLabel("Avg Intensity: N/A")
+        info_layout.addWidget(self.intensity_label)
+
+        info_layout.addStretch(1)
+        plot_layout.addWidget(info_widget, 1)
+
+        layout.addLayout(plot_layout)
 
         self.convergence_plot = pg.PlotWidget()
         self.convergence_plot.setBackground('w')
@@ -63,6 +119,9 @@ class Plot2DWindow(QWidget):
         self.convergence_plot.setLabel('bottom', 'Iteration')
         self.convergence_plot.showGrid(x=True, y=True, alpha=0.3)
         layout.addWidget(self.convergence_plot)
+
+        self.status_label = QLabel("Ready")
+        layout.addWidget(self.status_label)
 
         self.setLayout(layout)
 
@@ -100,13 +159,16 @@ class Plot2DWindow(QWidget):
         )
         self.plot_widget.addItem(self.population_scatter)
 
+        self.trail_lines = []
+
     def setup_algorithm(self):
         params = HBAParams(
             pop_size=self.spin_pop.value(),
             max_iter=self.spin_iter.value()
         )
         self.hba = HoneyBadgerAlgorithm(params)
-        self.hba.initialize_population(2, self.bounds)
+        self.hba.set_optimization_problem(self.func, 2, self.bounds)  # Use new method
+        self.update_info()
         self.update_population_plot()
 
     def update_population_plot(self):
@@ -115,38 +177,125 @@ class Plot2DWindow(QWidget):
             y = self.hba.population[:, 1]
             self.population_scatter.setData(x, y)
 
-    def run_optimization(self):
-        self.btn_run.setEnabled(False)
-        self.status_label.setText("Optimizing...")
+            if hasattr(self.hba, 'previous_population') and self.hba.previous_population is not None:
+                for line in self.trail_lines:
+                    self.plot_widget.removeItem(line)
+                self.trail_lines = []
 
-        params = HBAParams(
-            pop_size=self.spin_pop.value(),
-            max_iter=self.spin_iter.value()
-        )
-        self.hba = HoneyBadgerAlgorithm(params)
+                for i in range(self.hba.population.shape[0]):
+                    x_old = self.hba.previous_population[i, 0]
+                    y_old = self.hba.previous_population[i, 1]
+                    x_new = x[i]
+                    y_new = y[i]
 
-        best_solution, best_fitness = self.hba.optimize(
-            self.func, 2, self.bounds
-        )
+                    if np.sqrt((x_new - x_old) ** 2 + (y_new - y_old) ** 2) > 0.01:
+                        line = pg.PlotDataItem(
+                            [x_old, x_new], [y_old, y_new],
+                            pen=pg.mkPen(color=(255, 0, 0, 100), width=1, style=Qt.PenStyle.DotLine)
+                        )
+                        self.plot_widget.addItem(line)
+                        self.trail_lines.append(line)
 
-        # Update plots
+    def update_info(self):
+        self.iter_label.setText(f"Iteration: {self.hba.current_iter}/{self.hba.params.max_iter}")
+        self.best_label.setText(f"Best Fitness: {self.hba.best_fitness:.6f}")
+
+        if self.hba.best_solution is not None:
+            self.solution_label.setText(
+                f"Best Solution: [{self.hba.best_solution[0]:.4f}, {self.hba.best_solution[1]:.4f}]"
+            )
+
+        if hasattr(self.hba, 'current_phase'):
+            phase = self.hba.current_phase
+        else:
+            alpha = self.hba.update_density_factor()
+            phase = "Digging (Exploration)" if alpha > 0.5 else "Honey (Exploitation)"
+        self.state_label.setText(f"Phase: {phase}")
+
+        if hasattr(self.hba, 'last_intensity') and self.hba.last_intensity is not None:
+            avg_intensity = np.mean(self.hba.last_intensity)
+            self.intensity_label.setText(f"Avg Intensity: {avg_intensity:.4e}")
+
+    def step_optimization(self):
+        """Run a single iteration of optimization"""
+        if self.hba.current_iter >= self.hba.params.max_iter:
+            self.status_label.setText("Optimization complete!")
+            if self.is_animating:
+                self.toggle_animation()
+            return
+
+        self.hba.previous_population = self.hba.population.copy()
+
+        self.hba.run_one_iteration()
+
         self.update_population_plot()
+        self.update_info()
+
+        if len(self.hba.convergence_curve) > 0:
+            self.convergence_plot.clear()
+            self.convergence_plot.plot(
+                self.hba.convergence_curve,
+                pen=pg.mkPen(color='b', width=2)
+            )
+
+        self.status_label.setText(f"Step {self.hba.current_iter} complete")
+
+    def run_full_optimization(self):
+        self.btn_run_full.setEnabled(False)
+        self.btn_play.setEnabled(False)
+        self.btn_step.setEnabled(False)
+        self.status_label.setText("Running full optimization...")
+
+        remaining = self.hba.params.max_iter - self.hba.current_iter
+        for i in range(remaining):
+            self.hba.run_one_iteration()
+
+        self.update_population_plot()
+        self.update_info()
         self.plot_convergence()
 
-        self.status_label.setText(
-            f"Optimization complete! Best fitness: {best_fitness:.6f}\n"
-            f"Best solution: [{best_solution[0]:.4f}, {best_solution[1]:.4f}]"
-        )
-        self.btn_run.setEnabled(True)
+        self.status_label.setText(f"Full optimization complete in {remaining} steps")
+        self.btn_run_full.setEnabled(True)
+        self.btn_play.setEnabled(True)
+        self.btn_step.setEnabled(True)
+
+    def toggle_animation(self):
+        if not self.is_animating:
+            self.is_animating = True
+            self.btn_play.setText("⏸ Pause")
+            self.btn_run_full.setEnabled(False)
+            self.btn_step.setEnabled(False)
+            self.animation_timer.start(self.speed_slider.value())
+        else:
+            self.is_animating = False
+            self.btn_play.setText("▶ Play")
+            self.btn_run_full.setEnabled(True)
+            self.btn_step.setEnabled(True)
+            self.animation_timer.stop()
+
+    def update_speed(self):
+        speed = self.speed_slider.value()
+        self.speed_label.setText(f"{speed} ms")
+        if self.is_animating:
+            self.animation_timer.setInterval(speed)
 
     def plot_convergence(self):
-        self.convergence_plot.clear()
-        self.convergence_plot.plot(
-            self.hba.convergence_curve,
-            pen=pg.mkPen(color='b', width=2)
-        )
+        if len(self.hba.convergence_curve) > 0:
+            self.convergence_plot.clear()
+            self.convergence_plot.plot(
+                self.hba.convergence_curve,
+                pen=pg.mkPen(color='b', width=2)
+            )
 
     def reset(self):
+        if self.is_animating:
+            self.toggle_animation()
+
         self.setup_algorithm()
         self.convergence_plot.clear()
+
+        for line in self.trail_lines:
+            self.plot_widget.removeItem(line)
+        self.trail_lines = []
+
         self.status_label.setText("Reset complete")

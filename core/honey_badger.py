@@ -86,18 +86,6 @@ class HoneyBadgerAlgorithm:
 
         return new_population
 
-    def run_one_iteration(self) -> None:
-        alpha = self.update_density_factor()
-        intensity = self.compute_intensity()
-
-        if self.rng.random() < 0.5:
-            new_population = self.update_position_digging(alpha, intensity)
-        else:
-            new_population = self.update_position_honey(alpha)
-
-        self.population = new_population
-        self.current_iter += 1
-
     def optimize(self,
                  func: Callable[[npt.NDArray], float],
                  dim: int,
@@ -133,3 +121,41 @@ class HoneyBadgerAlgorithm:
             self.current_iter += 1
 
         return self.best_solution, self.best_fitness
+
+    def run_one_iteration(self) -> None:
+        if self.current_iter >= self.params.max_iter:
+            return
+
+        self.previous_population = self.population.copy()
+        alpha = self.update_density_factor()
+        intensity = self.compute_intensity()
+        self.last_intensity = intensity
+        self.current_phase = "Digging" if np.random.random() < 0.5 else "Honey"
+
+        if np.random.random() < 0.5:
+            new_population = self.update_position_digging(alpha, intensity)
+        else:
+            new_population = self.update_position_honey(alpha)
+
+        lower, upper = self.current_bounds
+        new_population = np.clip(new_population, lower, upper)
+
+        old_population = self.population.copy()
+        self.population = new_population
+        self.evaluate(self.current_func)
+
+        for i in range(self.params.pop_size):
+            old_fitness = self.current_func(old_population[i])
+            if old_fitness < self.fitness[i]:
+                self.population[i] = old_population[i]
+                self.fitness[i] = old_fitness
+
+        self.convergence_curve.append(self.best_fitness)
+        self.current_iter += 1
+
+    def set_optimization_problem(self, func, dim, bounds):
+        self.current_func = func
+        self.current_dim = dim
+        self.current_bounds = bounds
+        self.initialize_population(dim, bounds)
+        self.evaluate(func)
