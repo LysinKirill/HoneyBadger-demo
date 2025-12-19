@@ -191,7 +191,7 @@ class Plot2DWindow(QWidget):
             max_iter=self.spin_iter.value()
         )
         self.hba = HoneyBadgerAlgorithm(params)
-        self.hba.set_optimization_problem(self.func, 2, self.bounds)  # Use new method
+        self.hba.set_optimization_problem(self.func, 2, self.bounds)
         self.update_info()
         self.update_population_plot()
 

@@ -18,9 +18,9 @@ class HoneyBadgerAlgorithm:
         self.params = params
         self.rng = np.random.default_rng(params.seed)
 
-        self.population: npt.NDArray[np.float64] = None
-        self.fitness: npt.NDArray[np.float64] = None
-        self.best_solution: npt.NDArray[np.float64] = None
+        self.population: npt.NDArray[np.float64] | None = None
+        self.fitness: npt.NDArray[np.float64] | None = None
+        self.best_solution: npt.NDArray[np.float64] | None = None
         self.best_fitness: float = float('inf')
         self.convergence_curve: List[float] = []
         self.current_iter: int = 0

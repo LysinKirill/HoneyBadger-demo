@@ -140,7 +140,7 @@ SPRING_PROBLEM = EngineeringProblem(
                 "3. Deflection constraint\n"
                 "4. Diameter constraint",
     diagram="┌──────────────────────┐\n"
-            "│       Spring Design   │\n"
+            "│     Spring Design    │\n"
             "│                      │\n"
             "│      ╭───╮           │\n"
             "│   d  │   │           │\n"
@@ -148,7 +148,7 @@ SPRING_PROBLEM = EngineeringProblem(
             "│      ╰───╯◄─────────►│\n"
             "│                      │\n"
             "│  N active coils      │\n"
-            "│  ╭─╮╭─╮╭─╮╭─╮╭─╮    │\n"
+            "│  ╭─╮╭─╮╭─╮╭─╮╭─╮     │\n"
             "└──────────────────────┘",
     variables=[
         {"name": "d", "description": "Wire diameter (inches)", "unit": "in", "symbol": "d"},
@@ -169,7 +169,7 @@ PRESSURE_VESSEL_PROBLEM = EngineeringProblem(
     description="Design a cylindrical pressure vessel with hemispherical heads\n"
                 "for minimum fabrication cost subject to ASME constraints.",
     diagram="┌─────────────────────────┐\n"
-            "│  Pressure Vessel        │\n"
+            "│     Pressure Vessel     │\n"
             "│                         │\n"
             "│     ┌─────────────┐     │\n"
             "│     │    Th       │     │\n"
@@ -178,10 +178,10 @@ PRESSURE_VESSEL_PROBLEM = EngineeringProblem(
             "│  │  │      R      │ │   │\n"
             "│  │  │   ◄──────►  │ │   │\n"
             "│  └──┼─────────────┼─┘   │\n"
-            "│     │             │      │\n"
-            "│     │     L       │      │\n"
-            "│     │   ◄─────►   │      │\n"
-            "│     └─────────────┘      │\n"
+            "│     │             │     │\n"
+            "│     │     L       │     │\n"
+            "│     │   ◄─────►   │     │\n"
+            "│     └─────────────┘     │\n"
             "└─────────────────────────┘",
     variables=[
         {"name": "Ts", "description": "Shell thickness (inches)", "unit": "in", "symbol": "Tₛ"},
@@ -213,10 +213,10 @@ WELDED_BEAM_PROBLEM = EngineeringProblem(
             "│  │ h │  l  │ h │     │\n"
             "│  │   │     │   │     │\n"
             "│  └───┴─────┴───┘     │\n"
-            "│        t              │\n"
-            "│        ▲              │\n"
-            "│        │ b            │\n"
-            "│        ▼              │\n"
+            "│        t             │\n"
+            "│        ▲             │\n"
+            "│        │ b           │\n"
+            "│        ▼             │\n"
             "└──────────────────────┘",
     variables=[
         {"name": "h", "description": "Weld thickness (inches)", "unit": "in", "symbol": "h"},
@@ -295,14 +295,14 @@ ENGINEERING_PROBLEMS: Dict[str, Dict] = {
         'dim': 4
     },
     'Welded Beam': {
-        'problem': WELDED_BEAM_PROBLEM,  # Changed from None
+        'problem': WELDED_BEAM_PROBLEM,
         'function': welded_beam,
         'objective': welded_beam_objective,
         'bounds': [(0.1, 2.0), (0.1, 10.0), (0.1, 10.0), (0.1, 2.0)],
         'dim': 4
     },
     'Speed Reducer': {
-        'problem': SPEED_REDUCER_PROBLEM,  # Changed from None
+        'problem': SPEED_REDUCER_PROBLEM,
         'function': speed_reducer,
         'objective': speed_reducer_objective,
         'bounds': [(2.6, 3.6), (0.7, 0.8), (17, 28), (7.3, 8.3),

@@ -1,15 +1,13 @@
-from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout,
-                             QHBoxLayout, QPushButton, QLabel,
-                             QComboBox, QGroupBox, QDialog,
-                             QTextEdit, QDialogButtonBox)
 from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout,
+                             QPushButton, QLabel,
+                             QComboBox, QGroupBox)
 
+from core.engineering import ENGINEERING_PROBLEMS
+from core.functions import TEST_FUNCTIONS_2D, TEST_FUNCTIONS_3D
 from ui.engineering_visualizer import EngineeringVisualizer
 from ui.plot_2d import Plot2DWindow
 from ui.plot_3d import Plot3DWindow
-from core.functions import TEST_FUNCTIONS_2D, TEST_FUNCTIONS_3D
-from core.engineering import ENGINEERING_PROBLEMS
-from core.honey_badger import HoneyBadgerAlgorithm, HBAParams
 
 
 class MainWindow(QMainWindow):
