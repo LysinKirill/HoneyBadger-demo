@@ -16,7 +16,7 @@ class Plot2DWindow(QWidget):
         self.func_name = func_name
 
         self.setWindowTitle(f"2D HBA - {func_name}")
-        self.setGeometry(150, 150, 900, 700)
+        self.setGeometry(150, 150, 1000, 800)
 
         self.init_ui()
         self.setup_plot()
@@ -66,19 +66,39 @@ class Plot2DWindow(QWidget):
         speed_group = QGroupBox("Simulation Speed")
         speed_layout = QHBoxLayout()
 
-        speed_layout.addWidget(QLabel("Slow"))
+        speed_layout.addWidget(QLabel("Fast"))
         self.speed_slider = QSlider(Qt.Orientation.Horizontal)
-        self.speed_slider.setRange(1, 100)  # 1-100 ms
-        self.speed_slider.setValue(50)  # Default 50ms
+        self.speed_slider.setRange(1, 1000)
+        self.speed_slider.setValue(100)
         self.speed_slider.valueChanged.connect(self.update_speed)
         speed_layout.addWidget(self.speed_slider)
 
-        speed_layout.addWidget(QLabel("Fast"))
-        self.speed_label = QLabel("50 ms")
+        speed_layout.addWidget(QLabel("Slow"))
+        self.speed_label = QLabel("100 ms")
         speed_layout.addWidget(self.speed_label)
 
         speed_group.setLayout(speed_layout)
         layout.addWidget(speed_group)
+
+        preset_layout = QHBoxLayout()
+
+        slow_btn = QPushButton("Slow (500ms)")
+        slow_btn.clicked.connect(lambda: self.set_speed(500))
+        preset_layout.addWidget(slow_btn)
+
+        medium_btn = QPushButton("Medium (100ms)")
+        medium_btn.clicked.connect(lambda: self.set_speed(100))
+        preset_layout.addWidget(medium_btn)
+
+        fast_btn = QPushButton("Fast (50ms)")
+        fast_btn.clicked.connect(lambda: self.set_speed(50))
+        preset_layout.addWidget(fast_btn)
+
+        very_fast_btn = QPushButton("Very Fast (10ms)")
+        very_fast_btn.clicked.connect(lambda: self.set_speed(10))
+        preset_layout.addWidget(very_fast_btn)
+
+        layout.addLayout(preset_layout)
 
         plot_layout = QHBoxLayout()
 
@@ -124,6 +144,10 @@ class Plot2DWindow(QWidget):
         layout.addWidget(self.status_label)
 
         self.setLayout(layout)
+
+    def set_speed(self, speed_ms: int):
+        self.speed_slider.setValue(speed_ms)
+        self.update_speed()
 
     def setup_plot(self):
         resolution = 100
@@ -278,6 +302,10 @@ class Plot2DWindow(QWidget):
         self.speed_label.setText(f"{speed} ms")
         if self.is_animating:
             self.animation_timer.setInterval(speed)
+
+        if speed > 0:
+            fps = 1000 / speed
+            self.speed_slider.setToolTip(f"Speed: {speed}ms ({fps:.1f} FPS)")
 
     def plot_convergence(self):
         if len(self.hba.convergence_curve) > 0:
