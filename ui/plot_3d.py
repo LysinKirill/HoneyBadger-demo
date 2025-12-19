@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import numpy as np
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout,
                              QPushButton, QLabel, QSpinBox, QSlider,
@@ -5,6 +7,8 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout,
 from PyQt6.QtCore import Qt, QTimer
 import pyqtgraph.opengl as gl
 from core.honey_badger import HoneyBadgerAlgorithm, HBAParams
+from core.export_data import DataExporter
+from datetime import datetime
 
 
 class Plot3DWindow(QWidget):
@@ -61,6 +65,10 @@ class Plot3DWindow(QWidget):
         self.spin_iter.setRange(10, 2000)
         self.spin_iter.setValue(100)
         top_layout.addWidget(self.spin_iter)
+
+        self.btn_export = QPushButton("Export Results")
+        self.btn_export.clicked.connect(self.export_results)
+        top_layout.addWidget(self.btn_export)
 
         layout.addLayout(top_layout)
 
@@ -467,3 +475,18 @@ class Plot3DWindow(QWidget):
         self.setup_algorithm()
         self.reset_camera()
         self.status_label.setText("Reset complete")
+
+    def export_results(self):
+        export_data = {
+            'function_name': self.func_name,
+            'bounds': self.bounds,
+            'optimum': self.optimum.tolist(),
+            'optimization_results': self.hba.get_optimization_history(),
+            'timestamp': datetime.now().isoformat(),
+            'type': 'benchmark_3d'
+        }
+
+        filename = f"{self.func_name.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        filepath = DataExporter.export_to_json(export_data, filename, subfolder="benchmark_3d")
+
+        self.status_label.setText(f"Exported to io/exports/benchmark_3d/{Path(filepath).name}")

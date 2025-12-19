@@ -1,10 +1,16 @@
+from datetime import datetime
+from pathlib import Path
+
 import numpy as np
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout,
                              QPushButton, QLabel, QSpinBox, QSlider,
                              QGroupBox)
 from PyQt6.QtCore import Qt, QTimer
 import pyqtgraph as pg
+
+from core.export_data import DataExporter
 from core.honey_badger import HoneyBadgerAlgorithm, HBAParams
+
 
 
 class Plot2DWindow(QWidget):
@@ -46,6 +52,14 @@ class Plot2DWindow(QWidget):
         self.btn_reset = QPushButton("Reset")
         self.btn_reset.clicked.connect(self.reset)
         top_layout.addWidget(self.btn_reset)
+
+        self.btn_export = QPushButton("Export Results")
+        self.btn_export.clicked.connect(self.export_results)
+        top_layout.addWidget(self.btn_export)
+
+        self.btn_export_csv = QPushButton("Export CSV")
+        self.btn_export_csv.clicked.connect(self.export_csv)
+        top_layout.addWidget(self.btn_export_csv)
 
         top_layout.addStretch(1)
 
@@ -241,7 +255,6 @@ class Plot2DWindow(QWidget):
             self.intensity_label.setText(f"Avg Intensity: {avg_intensity:.4e}")
 
     def step_optimization(self):
-        """Run a single iteration of optimization"""
         if self.hba.current_iter >= self.hba.params.max_iter:
             self.status_label.setText("Optimization complete!")
             if self.is_animating:
@@ -327,3 +340,41 @@ class Plot2DWindow(QWidget):
         self.trail_lines = []
 
         self.status_label.setText("Reset complete")
+
+    def export_results(self):
+        export_data = {
+            'function_name': self.func_name,
+            'bounds': self.bounds,
+            'optimum': self.optimum.tolist(),
+            'optimization_results': self.hba.get_optimization_history(),
+            'timestamp': datetime.now().isoformat(),
+            'type': 'benchmark_2d'
+        }
+
+        filename = f"{self.func_name.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        filepath = DataExporter.export_to_json(export_data, filename, subfolder="benchmark_2d")
+
+        if self.hba.convergence_curve:
+            csv_filename = f"{self.func_name.replace(' ', '_')}_convergence_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            csv_filepath = DataExporter.export_convergence_csv(
+                self.hba.convergence_curve,
+                csv_filename,
+                subfolder="benchmark_2d"
+            )
+
+            self.status_label.setText(f"Exported to:\nJSON: {Path(filepath).name}\nCSV: {Path(csv_filepath).name}")
+        else:
+            self.status_label.setText(f"Exported to: {Path(filepath).name}")
+
+    def export_csv(self):
+        if not self.hba.convergence_curve:
+            self.status_label.setText("No convergence data to export")
+            return
+
+        filename = DataExporter.export_convergence_csv(self.hba.convergence_curve)
+
+        if self.hba.best_solutions_history:
+            solutions_file = DataExporter.export_solutions_csv(self.hba.best_solutions_history)
+            self.status_label.setText(f"Exported: {filename}, {solutions_file}")
+        else:
+            self.status_label.setText(f"Exported: {filename}")

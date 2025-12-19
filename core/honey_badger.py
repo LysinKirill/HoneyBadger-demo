@@ -25,6 +25,9 @@ class HoneyBadgerAlgorithm:
         self.convergence_curve: List[float] = []
         self.current_iter: int = 0
 
+        self.population_history: List[npt.NDArray] = []
+        self.best_solutions_history: List[npt.NDArray] = []
+
     def initialize_population(self, dim: int, bounds: Tuple[float, float]) -> None:
         lower, upper = bounds
         self.population = self.rng.uniform(
@@ -93,9 +96,11 @@ class HoneyBadgerAlgorithm:
         self.initialize_population(dim, bounds)
         self.evaluate(func)
         self.convergence_curve = [self.best_fitness]
+        self.population_history = [self.population.copy()]
+        self.best_solutions_history = [self.best_solution.copy()] if self.best_solution is not None else []
         self.current_iter = 0
 
-        for iter in range(self.params.max_iter):
+        for iteration in range(self.params.max_iter):
             alpha = self.update_density_factor()
             intensity = self.compute_intensity()
 
@@ -118,6 +123,8 @@ class HoneyBadgerAlgorithm:
                     self.fitness[i] = old_fitness
 
             self.convergence_curve.append(self.best_fitness)
+            self.population_history.append(self.population.copy())
+            self.best_solutions_history.append(self.best_solution.copy())
             self.current_iter += 1
 
         return self.best_solution, self.best_fitness
@@ -152,6 +159,8 @@ class HoneyBadgerAlgorithm:
 
         self.convergence_curve.append(self.best_fitness)
         self.current_iter += 1
+        self.population_history.append(self.population.copy())
+        self.best_solutions_history.append(self.best_solution.copy())
 
     def set_optimization_problem(self, func, dim, bounds):
         self.current_func = func
@@ -159,3 +168,19 @@ class HoneyBadgerAlgorithm:
         self.current_bounds = bounds
         self.initialize_population(dim, bounds)
         self.evaluate(func)
+
+    def get_optimization_history(self) -> dict:
+        return {
+            'params': {
+                'pop_size': self.params.pop_size,
+                'max_iter': self.params.max_iter,
+                'C': self.params.C,
+                'beta': self.params.beta,
+                'seed': self.params.seed
+            },
+            'convergence': self.convergence_curve,
+            'best_solutions': self.best_solutions_history,
+            'final_solution': self.best_solution.tolist() if self.best_solution is not None else None,
+            'final_fitness': self.best_fitness,
+            'iterations_completed': self.current_iter
+        }

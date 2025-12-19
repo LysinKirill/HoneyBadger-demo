@@ -1,12 +1,15 @@
+from pathlib import Path
+
 import pyqtgraph as pg
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QFont, QColor
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout,
-QPushButton, QLabel, QSpinBox, QSlider,
-QGroupBox, QTableWidget, QTableWidgetItem,
-QHeaderView)
+                             QPushButton, QLabel, QSpinBox, QSlider,
+                             QGroupBox, QTableWidget, QTableWidgetItem,
+                             QHeaderView)
 
 from core.honey_badger import HoneyBadgerAlgorithm, HBAParams
+
 
 class EngineeringVisualizer(QWidget):
     update_signal = pyqtSignal()
@@ -82,6 +85,11 @@ class EngineeringVisualizer(QWidget):
         self.btn_reset = QPushButton("Reset")
         self.btn_reset.clicked.connect(self.reset)
         btn_layout.addWidget(self.btn_reset)
+
+        self.btn_export = QPushButton("Export Solution")
+        self.btn_export.clicked.connect(self.export_solution)
+        btn_layout.addWidget(self.btn_export)
+
         control_layout.addLayout(btn_layout)
 
         param_layout = QHBoxLayout()
@@ -372,9 +380,9 @@ class EngineeringVisualizer(QWidget):
             obj_value, constraints, satisfied = self.func(self.hba.best_solution)
             self.objective_label.setText(f"Objective: {obj_value:.6f}")
             self.best_label.setText(f"Best Found: {self.hba.best_fitness:.6f}")
-            self.update_variable_table(obj_value, constraints, satisfied)
+            self.update_variable_table(constraints, satisfied)
 
-    def update_variable_table(self, obj_value, constraints, satisfied):
+    def update_variable_table(self, constraints, satisfied):
         for i in range(self.dim):
             if i < len(self.hba.best_solution):
                 value = self.hba.best_solution[i]
@@ -439,3 +447,67 @@ class EngineeringVisualizer(QWidget):
         self.objective_label.setText("Objective (Weight/Cost): N/A")
         self.best_label.setText("Best Found: N/A")
         self.status_label.setText("Status: Reset complete")
+
+    def export_solution(self):
+        from core.export_data import DataExporter
+        from datetime import datetime
+
+        if self.hba.best_solution is None:
+            self.status_label.setText("No solution to export")
+            return
+
+        export_data = {
+            'problem': self.problem_name,
+            'timestamp': datetime.now().isoformat(),
+            'type': 'engineering',
+            'parameters': {
+                'pop_size': self.hba.params.pop_size,
+                'max_iter': self.hba.params.max_iter,
+                'iterations_completed': self.hba.current_iter,
+                'bounds': self.bounds
+            },
+            'solution': {
+                'variables': self.hba.best_solution.tolist(),
+                'variable_names': [v['name'] for v in self.problem.variables] if self.problem else [],
+                'objective_value': float(self.hba.best_fitness)
+            },
+            'convergence_data': self.convergence_curve
+        }
+
+        if hasattr(self, 'func'):
+            try:
+                obj_value, constraints_array, satisfied = self.func(self.hba.best_solution)
+                export_data['solution']['feasibility_check'] = {
+                    'objective_value': float(obj_value),
+                    'all_constraints_satisfied': all(satisfied)
+                }
+
+                if hasattr(self.problem, 'constraints'):
+                    constraint_details = []
+                    for i, const_info in enumerate(self.problem.constraints):
+                        if i < len(constraints_array):
+                            constraint_details.append({
+                                'name': const_info['name'],
+                                'value': float(constraints_array[i]),
+                                'satisfied': bool(satisfied[i]),
+                                'limit': 0.0
+                            })
+                    export_data['constraints'] = constraint_details
+            except:
+                pass
+
+        filename = f"{self.problem_name.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        filepath = DataExporter.export_to_json(export_data, filename, subfolder="engineering")
+
+        if self.convergence_curve:
+            csv_filename = f"{self.problem_name.replace(' ', '_')}_convergence_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            csv_filepath = DataExporter.export_convergence_csv(
+                self.convergence_curve,
+                csv_filename,
+                subfolder="engineering"
+            )
+
+            self.status_label.setText(
+                f"Exported to io/exports/engineering/\n{Path(filepath).name}\n{Path(csv_filepath).name}")
+        else:
+            self.status_label.setText(f"Exported to io/exports/engineering/{Path(filepath).name}")
