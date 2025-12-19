@@ -3,7 +3,8 @@ from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QFont, QColor
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout,
                              QPushButton, QLabel, QSpinBox, QSlider,
-                             QGroupBox, QTableWidget, QTableWidgetItem, QHeaderView)
+                             QGroupBox, QTableWidget, QTableWidgetItem,
+                             QHeaderView, QGraphicsRectItem)
 
 from core.honey_badger import HoneyBadgerAlgorithm, HBAParams
 
@@ -21,6 +22,20 @@ class EngineeringVisualizer(QWidget):
         self.bounds = problem_data['bounds']
         self.dim = problem_data['dim']
 
+        # Add for population visualization
+        self.population_history = []
+        self.current_population_scatter = None
+        self.best_solution_scatter = None
+        self.previous_population = None
+        self.convergence_curve = []
+        self.history = []
+        self.trail_lines = []
+
+        # Store plot ranges
+        self.x_range = None
+        self.y_range = None
+        self.bounds_rect = None
+
         self.setWindowTitle(f"HBA - {problem_name}")
         self.setGeometry(200, 200, 1200, 800)
 
@@ -32,7 +47,6 @@ class EngineeringVisualizer(QWidget):
         self.is_animating = False
 
         self.update_signal.connect(self.update_display)
-        self.history = []
 
     def init_ui(self):
         layout = QHBoxLayout()
@@ -113,16 +127,36 @@ class EngineeringVisualizer(QWidget):
         left_widget.setLayout(left_panel)
         layout.addWidget(left_widget, 1)
 
+        # Center panel with plots
         center_panel = QVBoxLayout()
 
-        self.plot_widget = pg.PlotWidget()
-        self.plot_widget.setBackground('w')
-        self.plot_widget.setLabel('left', 'Objective Value')
-        self.plot_widget.setLabel('bottom', 'Iteration')
-        self.plot_widget.showGrid(x=True, y=True, alpha=0.3)
-        center_panel.addWidget(self.plot_widget, 2)
+        # Convergence plot
+        self.convergence_plot = pg.PlotWidget()
+        self.convergence_plot.setBackground('w')
+        self.convergence_plot.setLabel('left', 'Objective Value')
+        self.convergence_plot.setLabel('bottom', 'Iteration')
+        self.convergence_plot.showGrid(x=True, y=True, alpha=0.3)
+        self.convergence_plot.setMinimumHeight(300)
+        center_panel.addWidget(self.convergence_plot)
 
-        info_group = QGroupBox("Current Design")
+        # Population visualization plot (for 2D problems)
+        self.population_plot = pg.PlotWidget()
+        self.population_plot.setBackground('w')
+        self.population_plot.showGrid(x=True, y=True, alpha=0.3)
+        self.population_plot.setMinimumHeight(300)
+
+        # Initialize plot ranges based on problem bounds
+        self.initialize_plot_ranges()
+
+        # Set initial ranges
+        if self.x_range and self.y_range:
+            self.population_plot.setXRange(self.x_range[0], self.x_range[1])
+            self.population_plot.setYRange(self.y_range[0], self.y_range[1])
+
+        center_panel.addWidget(self.population_plot)
+
+        # Info group
+        info_group = QGroupBox("Current Status")
         info_layout = QVBoxLayout()
 
         self.iter_label = QLabel("Iteration: 0/0")
@@ -137,8 +171,11 @@ class EngineeringVisualizer(QWidget):
         self.optimal_label = QLabel(f"Literature Optimum: {self.problem_data['optimal']}")
         info_layout.addWidget(self.optimal_label)
 
+        self.status_label = QLabel("Status: Initialized")
+        info_layout.addWidget(self.status_label)
+
         info_group.setLayout(info_layout)
-        center_panel.addWidget(info_group, 1)
+        center_panel.addWidget(info_group)
 
         center_widget = QWidget()
         center_widget.setLayout(center_panel)
@@ -177,6 +214,36 @@ class EngineeringVisualizer(QWidget):
         self.setLayout(layout)
 
         self.setup_tables()
+
+    def initialize_plot_ranges(self):
+        """Initialize plot ranges based on problem bounds with padding"""
+        if self.dim >= 2:
+            # Get bounds for first two variables
+            x_min, x_max = self.bounds[0]
+            y_min, y_max = self.bounds[1]
+
+            # Add 20% padding (increased from 10% for better visibility)
+            x_padding = (x_max - x_min) * 0.2
+            y_padding = (y_max - y_min) * 0.2
+
+            self.x_range = (x_min - x_padding, x_max + x_padding)
+            self.y_range = (y_min - y_padding, y_max + y_padding)
+
+            # Set plot labels
+            if self.problem and len(self.problem.variables) >= 2:
+                var1 = self.problem.variables[0]['name']
+                var2 = self.problem.variables[1]['name']
+                self.population_plot.setLabel('bottom', var1)
+                self.population_plot.setLabel('left', var2)
+            else:
+                self.population_plot.setLabel('bottom', 'Variable 1')
+                self.population_plot.setLabel('left', 'Variable 2')
+        else:
+            # For 1D problems, set a default range
+            self.x_range = (0, 1)
+            self.y_range = (0, 1)
+            self.population_plot.setLabel('bottom', 'N/A')
+            self.population_plot.setLabel('left', 'N/A')
 
     def setup_tables(self):
         if self.problem:
@@ -217,10 +284,48 @@ class EngineeringVisualizer(QWidget):
         self.setup_algorithm()
         self.history = []
         self.convergence_curve = []
+        self.population_history = []
+        self.trail_lines = []
+        self.previous_population = None
+        self.bounds_rect = None
+
+        # Clear and setup plots
+        self.convergence_plot.clear()
+        self.population_plot.clear()
+
+        # Setup population plot with bounds
+        if self.dim >= 2:
+            self.setup_population_plot()
 
         self.update_display()
+        self.update_visualization()
+        self.status_label.setText("Status: Initialized - Ready to optimize")
         self.btn_run.setText("Reinitialize")
         self.btn_run.setEnabled(True)
+
+    def setup_population_plot(self):
+        """Setup the population plot with bounds rectangle"""
+        if self.dim < 2:
+            return
+
+        # Clear any existing bounds rectangle
+        if self.bounds_rect:
+            self.population_plot.removeItem(self.bounds_rect)
+
+        # Create bounds rectangle using pyqtgraph's built-in RectROI
+        x_min, x_max = self.bounds[0]
+        y_min, y_max = self.bounds[1]
+
+        # Create a simple rectangle using PlotDataItem (more reliable)
+        rect_x = [x_min, x_max, x_max, x_min, x_min]
+        rect_y = [y_min, y_min, y_max, y_max, y_min]
+
+        self.bounds_rect = pg.PlotDataItem(
+            rect_x, rect_y,
+            pen=pg.mkPen('k', width=1, style=Qt.PenStyle.DashLine),
+            connect='all'
+        )
+        self.population_plot.addItem(self.bounds_rect)
 
     def step_optimization(self):
         if self.hba.current_iter >= self.hba.params.max_iter:
@@ -229,25 +334,106 @@ class EngineeringVisualizer(QWidget):
                 self.toggle_animation()
             return
 
+        # Store previous population for trails
+        if hasattr(self.hba, 'population') and self.hba.population is not None:
+            self.previous_population = self.hba.population.copy()
+
         self.hba.run_one_iteration()
         self.convergence_curve.append(self.hba.best_fitness)
         self.history.append(self.hba.best_solution.copy() if self.hba.best_solution is not None else None)
 
+        # Store population for visualization
+        if self.hba.population is not None:
+            self.population_history.append(self.hba.population.copy())
+
         self.update_display()
+        self.update_visualization()
 
+        self.status_label.setText(f"Status: Iteration {self.hba.current_iter} complete")
+
+    def update_visualization(self):
+        # Update convergence plot
         if len(self.convergence_curve) > 0:
-            self.plot_widget.clear()
-            self.plot_widget.plot(self.convergence_curve, pen=pg.mkPen('b', width=2))
+            self.convergence_plot.clear()
+            self.convergence_plot.plot(self.convergence_curve, pen=pg.mkPen('b', width=2))
 
-            if len(self.convergence_curve) > 1:
-                current_point = pg.ScatterPlotItem(
-                    [len(self.convergence_curve) - 1],
-                    [self.convergence_curve[-1]],
-                    pen=pg.mkPen('r'),
-                    brush=pg.mkBrush('r'),
-                    size=10
+            # Add current point
+            current_point = pg.ScatterPlotItem(
+                [len(self.convergence_curve) - 1],
+                [self.convergence_curve[-1]],
+                pen=pg.mkPen('r'),
+                brush=pg.mkBrush('r'),
+                size=10
+            )
+            self.convergence_plot.addItem(current_point)
+
+        # Update population plot (for 2D problems only)
+        if self.dim >= 2 and self.hba.population is not None and len(self.hba.population) > 0:
+            # Remove old scatter plots but keep bounds rectangle
+            if self.current_population_scatter:
+                self.population_plot.removeItem(self.current_population_scatter)
+            if self.best_solution_scatter:
+                self.population_plot.removeItem(self.best_solution_scatter)
+
+            # Clear old trail lines
+            for line in self.trail_lines:
+                self.population_plot.removeItem(line)
+            self.trail_lines = []
+
+            # Plot population
+            x = self.hba.population[:, 0]
+            y = self.hba.population[:, 1]
+
+            # Plot trails if we have previous population
+            if self.previous_population is not None and len(self.previous_population) == len(x):
+                for i in range(len(x)):
+                    x_old = self.previous_population[i, 0]
+                    y_old = self.previous_population[i, 1]
+
+                    # Draw trail line (only if movement is significant)
+                    if abs(x[i] - x_old) > 0.001 or abs(y[i] - y_old) > 0.001:
+                        line = pg.PlotDataItem(
+                            [x_old, x[i]], [y_old, y[i]],
+                            pen=pg.mkPen(color=(255, 0, 0, 100), width=1)
+                        )
+                        self.population_plot.addItem(line)
+                        self.trail_lines.append(line)
+
+            # Plot current population with larger size for better visibility
+            self.current_population_scatter = pg.ScatterPlotItem(
+                x, y,
+                pen=pg.mkPen('b', width=1),
+                brush=pg.mkBrush('b'),
+                size=12,  # Increased size
+                symbol='o',
+                pxMode=True  # Size in pixels, not data units
+            )
+            self.population_plot.addItem(self.current_population_scatter)
+
+            # Plot best solution
+            if self.hba.best_solution is not None and len(self.hba.best_solution) >= 2:
+                self.best_solution_scatter = pg.ScatterPlotItem(
+                    [self.hba.best_solution[0]], [self.hba.best_solution[1]],
+                    pen=pg.mkPen('g', width=3),
+                    brush=pg.mkBrush('g'),
+                    size=20,  # Increased size
+                    symbol='x',
+                    pxMode=True
                 )
-                self.plot_widget.addItem(current_point)
+                self.population_plot.addItem(self.best_solution_scatter)
+
+            # Ensure bounds rectangle stays on top
+            if self.bounds_rect:
+                self.population_plot.removeItem(self.bounds_rect)
+                self.population_plot.addItem(self.bounds_rect)
+
+        elif self.dim < 2:
+            # Clear population plot for 1D problems
+            self.population_plot.clear()
+            self.population_plot.setLabel('left', 'N/A')
+            self.population_plot.setLabel('bottom', 'N/A')
+            self.population_plot.addItem(pg.TextItem("Population visualization\navailable for 2D+ problems only",
+                                                     color='k', anchor=(0.5, 0.5)))
 
     def update_display(self):
         self.iter_label.setText(f"Iteration: {self.hba.current_iter}/{self.hba.params.max_iter}")
@@ -288,12 +474,14 @@ class EngineeringVisualizer(QWidget):
             self.btn_step.setEnabled(False)
             self.btn_run.setEnabled(False)
             self.animation_timer.start(self.speed_slider.value())
+            self.status_label.setText("Status: Running animation...")
         else:
             self.is_animating = False
             self.btn_play.setText("▶ Run")
             self.btn_step.setEnabled(True)
             self.btn_run.setEnabled(True)
             self.animation_timer.stop()
+            self.status_label.setText("Status: Animation paused")
 
     def update_speed(self):
         speed = self.speed_slider.value()
@@ -308,8 +496,24 @@ class EngineeringVisualizer(QWidget):
         self.setup_algorithm()
         self.convergence_curve = []
         self.history = []
-        self.plot_widget.clear()
+        self.population_history = []
+        self.trail_lines = []
+        self.previous_population = None
+        self.bounds_rect = None
 
+        # Clear plots
+        self.convergence_plot.clear()
+        self.population_plot.clear()
+
+        # Re-initialize plot ranges and bounds
+        if self.dim >= 2:
+            self.initialize_plot_ranges()
+            self.setup_population_plot()
+            if self.x_range and self.y_range:
+                self.population_plot.setXRange(self.x_range[0], self.x_range[1])
+                self.population_plot.setYRange(self.y_range[0], self.y_range[1])
+
+        # Reset tables
         for i in range(self.dim):
             self.variable_table.setItem(i, 1, QTableWidgetItem("N/A"))
 
@@ -320,3 +524,4 @@ class EngineeringVisualizer(QWidget):
         self.iter_label.setText("Iteration: 0/0")
         self.objective_label.setText("Objective (Weight/Cost): N/A")
         self.best_label.setText("Best Found: N/A")
+        self.status_label.setText("Status: Reset complete")
