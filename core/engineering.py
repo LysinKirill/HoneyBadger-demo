@@ -1,16 +1,26 @@
+from typing import Tuple, Dict, List
+
 import numpy as np
-from typing import Tuple, Dict, Callable
 import numpy.typing as npt
 
 
-def spring_design(x: npt.NDArray) -> Tuple[float, npt.NDArray]:
-    """
-    Minimize weight of tension/compression spring
-    x = [d, D, N] where:
-    d = wire diameter
-    D = mean coil diameter
-    N = number of active coils
-    """
+class EngineeringProblem:
+    def __init__(self, name: str, description: str, diagram: str,
+                 variables: List[dict], constraints: List[dict]):
+        self.name = name
+        self.description = description
+        self.diagram = diagram
+        self.variables = variables
+        self.constraints = constraints
+
+    def get_variable_info(self, idx: int) -> dict:
+        return self.variables[idx]
+
+    def get_constraint_info(self, idx: int) -> dict:
+        return self.constraints[idx]
+
+
+def spring_design(x: npt.NDArray) -> Tuple[float, npt.NDArray, List[bool]]:
     d, D, N = x[0], x[1], x[2]
 
     f = (N + 2) * D * d ** 2
@@ -20,24 +30,15 @@ def spring_design(x: npt.NDArray) -> Tuple[float, npt.NDArray]:
     g3 = 1 - (140.45 * d) / (D ** 2 * N)
     g4 = (D + d) / 1.5 - 1
 
-    penalty = 0
-    penalty += 1000 * max(0, -g1) ** 2
-    penalty += 1000 * max(0, -g2) ** 2
-    penalty += 1000 * max(0, -g3) ** 2
-    penalty += 1000 * max(0, -g4) ** 2
+    constraints = np.array([g1, g2, g3, g4])
+    satisfied = constraints <= 0
 
-    return f + penalty, np.array([g1, g2, g3, g4])
+    penalty = 1000 * np.sum(np.maximum(0, -constraints) ** 2)
+
+    return f + penalty, constraints, satisfied.tolist()
 
 
-def pressure_vessel(x: npt.NDArray) -> Tuple[float, npt.NDArray]:
-    """
-    Minimize total cost of pressure vessel
-    x = [Ts, Th, R, L] where:
-    Ts = shell thickness
-    Th = head thickness
-    R = inner radius
-    L = length of cylindrical section
-    """
+def pressure_vessel(x: npt.NDArray) -> Tuple[float, npt.NDArray, List[bool]]:
     Ts = 0.0625 * np.round(x[0] / 0.0625)
     Th = 0.0625 * np.round(x[1] / 0.0625)
     R, L = x[2], x[3]
@@ -49,24 +50,15 @@ def pressure_vessel(x: npt.NDArray) -> Tuple[float, npt.NDArray]:
     g3 = -np.pi * R ** 2 * L - (4 / 3) * np.pi * R ** 3 + 1296000
     g4 = L - 240
 
-    penalty = 0
-    penalty += 1000 * max(0, -g1) ** 2
-    penalty += 1000 * max(0, -g2) ** 2
-    penalty += 1000 * max(0, -g3) ** 2
-    penalty += 1000 * max(0, -g4) ** 2
+    constraints = np.array([g1, g2, g3, g4])
+    satisfied = constraints <= 0
 
-    return f + penalty, np.array([g1, g2, g3, g4])
+    penalty = 1000 * np.sum(np.maximum(0, -constraints) ** 2)
+
+    return f + penalty, constraints, satisfied.tolist()
 
 
-def welded_beam(x: npt.NDArray) -> Tuple[float, npt.NDArray]:
-    """
-    Minimize fabrication cost of welded beam
-    x = [h, l, t, b] where:
-    h = weld thickness
-    l = weld length
-    t = beam thickness
-    b = beam width
-    """
+def welded_beam(x: npt.NDArray) -> Tuple[float, npt.NDArray, List[bool]]:
     h, l, t, b = x[0], x[1], x[2], x[3]
 
     P = 6000
@@ -94,16 +86,13 @@ def welded_beam(x: npt.NDArray) -> Tuple[float, npt.NDArray]:
     g6 = P - Pc
 
     constraints = np.array([g1, g2, g3, g4, g5, g6])
+    satisfied = constraints <= 0
     penalty = 1000 * np.sum(np.maximum(0, -constraints) ** 2)
 
-    return f + penalty, constraints
+    return f + penalty, constraints, satisfied.tolist()
 
 
-def speed_reducer(x: npt.NDArray) -> Tuple[float, npt.NDArray]:
-    """
-    Minimize weight of speed reducer
-    7 variables: b, m, z, l1, l2, d1, d2
-    """
+def speed_reducer(x: npt.NDArray) -> Tuple[float, npt.NDArray, List[bool]]:
     b, m, z, l1, l2, d1, d2 = x[0], x[1], x[2], x[3], x[4], x[5], x[6]
 
     f = 0.7854 * b * m ** 2 * (3.3333 * z ** 2 + 14.9334 * z - 43.0934) - \
@@ -123,39 +112,205 @@ def speed_reducer(x: npt.NDArray) -> Tuple[float, npt.NDArray]:
     g11 = (1.1 * d2 + 1.9) / l2 - 1
 
     constraints = np.array([g1, g2, g3, g4, g5, g6, g7, g8, g9, g10, g11])
+    satisfied = constraints <= 0
     penalty = 1000 * np.sum(np.maximum(0, -constraints) ** 2)
 
-    return f + penalty, constraints
+    return f + penalty, constraints, satisfied.tolist()
 
+
+def spring_design_objective(x: npt.NDArray) -> float:
+    """Wrapper that returns only the objective value"""
+    return spring_design(x)[0]
+
+def pressure_vessel_objective(x: npt.NDArray) -> float:
+    return pressure_vessel(x)[0]
+
+def welded_beam_objective(x: npt.NDArray) -> float:
+    return welded_beam(x)[0]
+
+def speed_reducer_objective(x: npt.NDArray) -> float:
+    return speed_reducer(x)[0]
+
+
+SPRING_PROBLEM = EngineeringProblem(
+    name="Spring Design",
+    description="Design a helical compression spring for minimum weight subject to:\n"
+                "1. Shear stress constraint\n"
+                "2. Surge frequency constraint\n"
+                "3. Deflection constraint\n"
+                "4. Diameter constraint",
+    diagram="┌──────────────────────┐\n"
+            "│       Spring Design   │\n"
+            "│                      │\n"
+            "│      ╭───╮           │\n"
+            "│   d  │   │           │\n"
+            "│  ───►│   │ D         │\n"
+            "│      ╰───╯◄─────────►│\n"
+            "│                      │\n"
+            "│  N active coils      │\n"
+            "│  ╭─╮╭─╮╭─╮╭─╮╭─╮    │\n"
+            "└──────────────────────┘",
+    variables=[
+        {"name": "d", "description": "Wire diameter (inches)", "unit": "in", "symbol": "d"},
+        {"name": "D", "description": "Mean coil diameter (inches)", "unit": "in", "symbol": "D"},
+        {"name": "N", "description": "Number of active coils", "unit": "", "symbol": "N"}
+    ],
+    constraints=[
+        {"name": "Shear Stress", "description": "τ ≤ 13600 psi", "formula": "g₁ = 1 - D³N/(71785d⁴) ≤ 0"},
+        {"name": "Surge Frequency", "description": "Avoid natural frequency resonance",
+         "formula": "g₂ = (4D²-dD)/(12566(d³D-d⁴)) + 1/(5108d²) - 1 ≤ 0"},
+        {"name": "Deflection", "description": "δ ≥ 0.1 inches", "formula": "g₃ = 1 - (140.45d)/(D²N) ≤ 0"},
+        {"name": "Diameter", "description": "Outer diameter ≤ 1.5 in", "formula": "g₄ = (D+d)/1.5 - 1 ≤ 0"}
+    ]
+)
+
+PRESSURE_VESSEL_PROBLEM = EngineeringProblem(
+    name="Pressure Vessel",
+    description="Design a cylindrical pressure vessel with hemispherical heads\n"
+                "for minimum fabrication cost subject to ASME constraints.",
+    diagram="┌─────────────────────────┐\n"
+            "│  Pressure Vessel        │\n"
+            "│                         │\n"
+            "│     ┌─────────────┐     │\n"
+            "│     │    Th       │     │\n"
+            "│  Ts │             │ Ts  │\n"
+            "│  ▲  │             │ ▲   │\n"
+            "│  │  │      R      │ │   │\n"
+            "│  │  │   ◄──────►  │ │   │\n"
+            "│  └──┼─────────────┼─┘   │\n"
+            "│     │             │      │\n"
+            "│     │     L       │      │\n"
+            "│     │   ◄─────►   │      │\n"
+            "│     └─────────────┘      │\n"
+            "└─────────────────────────┘",
+    variables=[
+        {"name": "Ts", "description": "Shell thickness (inches)", "unit": "in", "symbol": "Tₛ"},
+        {"name": "Th", "description": "Head thickness (inches)", "unit": "in", "symbol": "Tₕ"},
+        {"name": "R", "description": "Inner radius (inches)", "unit": "in", "symbol": "R"},
+        {"name": "L", "description": "Cylinder length (inches)", "unit": "in", "symbol": "L"}
+    ],
+    constraints=[
+        {"name": "Shell Thickness", "description": "Ts ≥ 0.0193R", "formula": "g₁ = -Tₛ + 0.0193R ≤ 0"},
+        {"name": "Head Thickness", "description": "Th ≥ 0.00954R", "formula": "g₂ = -Tₕ + 0.00954R ≤ 0"},
+        {"name": "Volume", "description": "Volume ≥ 750 ft³", "formula": "g₃ = -πR²L - (4/3)πR³ + 1296000 ≤ 0"},
+        {"name": "Length", "description": "L ≤ 240 in", "formula": "g₄ = L - 240 ≤ 0"}
+    ]
+)
+WELDED_BEAM_PROBLEM = EngineeringProblem(
+    name="Welded Beam Design",
+    description="Design a welded beam for minimum cost subject to:\n"
+                "1. Shear stress constraint\n"
+                "2. Bending stress constraint\n"
+                "3. Buckling load constraint\n"
+                "4. Deflection constraint\n"
+                "5. Side constraints",
+    diagram="┌──────────────────────┐\n"
+            "│     Welded Beam      │\n"
+            "│                      │\n"
+            "│    P = 6000 lb       │\n"
+            "│      ↓               │\n"
+            "│  ┌───┬─────┬───┐     │\n"
+            "│  │ h │  l  │ h │     │\n"
+            "│  │   │     │   │     │\n"
+            "│  └───┴─────┴───┘     │\n"
+            "│        t              │\n"
+            "│        ▲              │\n"
+            "│        │ b            │\n"
+            "│        ▼              │\n"
+            "└──────────────────────┘",
+    variables=[
+        {"name": "h", "description": "Weld thickness (inches)", "unit": "in", "symbol": "h"},
+        {"name": "l", "description": "Weld length (inches)", "unit": "in", "symbol": "l"},
+        {"name": "t", "description": "Beam thickness (inches)", "unit": "in", "symbol": "t"},
+        {"name": "b", "description": "Beam width (inches)", "unit": "in", "symbol": "b"}
+    ],
+    constraints=[
+        {"name": "Shear Stress", "description": "τ ≤ 13600 psi", "formula": "g₁ = τ - 13600 ≤ 0"},
+        {"name": "Bending Stress", "description": "σ ≤ 30000 psi", "formula": "g₂ = σ - 30000 ≤ 0"},
+        {"name": "Geometry", "description": "h ≤ b", "formula": "g₃ = h - b ≤ 0"},
+        {"name": "Min Weld", "description": "h ≥ 0.125 in", "formula": "g₄ = 0.125 - h ≤ 0"},
+        {"name": "Deflection", "description": "δ ≤ 0.25 in", "formula": "g₅ = δ - 0.25 ≤ 0"},
+        {"name": "Buckling", "description": "P ≤ P_c", "formula": "g₆ = P - P_c ≤ 0"}
+    ]
+)
+
+SPEED_REDUCER_PROBLEM = EngineeringProblem(
+    name="Speed Reducer Design",
+    description="Design a speed reducer for minimum weight subject to:\n"
+                "1. Bending stress constraints\n"
+                "2. Surface stress constraints\n"
+                "3. Transverse deflection constraints\n"
+                "4. Geometry constraints",
+    diagram="┌─────────────────────────┐\n"
+            "│     Speed Reducer       │\n"
+            "│                         │\n"
+            "│   Input Shaft ◄─┐       │\n"
+            "│       │         │       │\n"
+            "│  Gear 1         │       │\n"
+            "│    m,z          │       │\n"
+            "│       │  Gear 2 │       │\n"
+            "│  ┌────▼────┐    │       │\n"
+            "│  │  Bearing│    │       │\n"
+            "│  │   d₁,l₁ │    │       │\n"
+            "│  └─────────┘    │       │\n"
+            "│  Output Shaft ◄─┘       │\n"
+            "└─────────────────────────┘",
+    variables=[
+        {"name": "b", "description": "Face width (inches)", "unit": "in", "symbol": "b"},
+        {"name": "m", "description": "Module (inches)", "unit": "in", "symbol": "m"},
+        {"name": "z", "description": "Number of teeth", "unit": "", "symbol": "z"},
+        {"name": "l₁", "description": "Length of shaft 1 (inches)", "unit": "in", "symbol": "l₁"},
+        {"name": "l₂", "description": "Length of shaft 2 (inches)", "unit": "in", "symbol": "l₂"},
+        {"name": "d₁", "description": "Diameter of shaft 1 (inches)", "unit": "in", "symbol": "d₁"},
+        {"name": "d₂", "description": "Diameter of shaft 2 (inches)", "unit": "in", "symbol": "d₂"}
+    ],
+    constraints=[
+        {"name": "Bending Stress 1", "description": "σ₁ ≤ allowable", "formula": "g₁ = 27/(bm²z) - 1 ≤ 0"},
+        {"name": "Bending Stress 2", "description": "σ₂ ≤ allowable", "formula": "g₂ = 397.5/(bm²z²) - 1 ≤ 0"},
+        {"name": "Surface Stress 1", "description": "Contact stress limit", "formula": "g₃ = 1.93l₁³/(mzd₁⁴) - 1 ≤ 0"},
+        {"name": "Surface Stress 2", "description": "Contact stress limit", "formula": "g₄ = 1.93l₂³/(mzd₂⁴) - 1 ≤ 0"},
+        {"name": "Deflection 1", "description": "Shaft 1 deflection", "formula": "g₅ = √((745l₁/(mz))² + 16.9e6)/(110d₁³) - 1 ≤ 0"},
+        {"name": "Deflection 2", "description": "Shaft 2 deflection", "formula": "g₆ = √((745l₂/(mz))² + 157.5e6)/(85d₂³) - 1 ≤ 0"},
+        {"name": "Geometry 1", "description": "mz/40 ≤ 1", "formula": "g₇ = mz/40 - 1 ≤ 0"},
+        {"name": "Geometry 2", "description": "5m/b ≤ 1", "formula": "g₈ = 5m/b - 1 ≤ 0"},
+        {"name": "Geometry 3", "description": "b/(12m) ≤ 1", "formula": "g₉ = b/(12m) - 1 ≤ 0"},
+        {"name": "Geometry 4", "description": "(1.5d₁ + 1.9)/l₁ ≤ 1", "formula": "g₁₀ = (1.5d₁ + 1.9)/l₁ - 1 ≤ 0"},
+        {"name": "Geometry 5", "description": "(1.1d₂ + 1.9)/l₂ ≤ 1", "formula": "g₁₁ = (1.1d₂ + 1.9)/l₂ - 1 ≤ 0"}
+    ]
+)
 
 ENGINEERING_PROBLEMS: Dict[str, Dict] = {
     'Spring Design': {
-        'function': lambda x: spring_design(x)[0],
+        'problem': SPRING_PROBLEM,
+        'function': spring_design,
         'bounds': [(0.05, 2.0), (0.25, 1.3), (2.0, 15.0)],
+        'objective': spring_design_objective,
         'dim': 3,
         'optimal': 0.012665,
-        'description': 'Minimize weight of tension/compression spring'
     },
     'Pressure Vessel': {
-        'function': lambda x: pressure_vessel(x)[0],
+        'problem': PRESSURE_VESSEL_PROBLEM,
+        'function': pressure_vessel,
+        'objective': pressure_vessel_objective,
         'bounds': [(0.0625, 99 * 0.0625), (0.0625, 99 * 0.0625), (10, 200), (10, 200)],
         'dim': 4,
         'optimal': 5885.332,
-        'description': 'Minimize fabrication cost of pressure vessel'
     },
     'Welded Beam': {
-        'function': lambda x: welded_beam(x)[0],
+        'problem': WELDED_BEAM_PROBLEM,  # Changed from None
+        'function': welded_beam,
+        'objective': welded_beam_objective,
         'bounds': [(0.1, 2.0), (0.1, 10.0), (0.1, 10.0), (0.1, 2.0)],
         'dim': 4,
         'optimal': 1.724852,
-        'description': 'Minimize cost of welded beam'
     },
     'Speed Reducer': {
-        'function': lambda x: speed_reducer(x)[0],
+        'problem': SPEED_REDUCER_PROBLEM,  # Changed from None
+        'function': speed_reducer,
+        'objective': speed_reducer_objective,
         'bounds': [(2.6, 3.6), (0.7, 0.8), (17, 28), (7.3, 8.3),
                    (7.3, 8.3), (2.9, 3.9), (5.0, 5.5)],
         'dim': 7,
         'optimal': 2994.471,
-        'description': 'Minimize weight of speed reducer'
     }
 }
