@@ -1,6 +1,8 @@
 import numpy as np
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout,
-                             QPushButton, QLabel, QSpinBox)
+                             QPushButton, QLabel, QSpinBox, QSlider,
+                             QGroupBox)
+from PyQt6.QtCore import Qt, QTimer
 import pyqtgraph.opengl as gl
 from core.honey_badger import HoneyBadgerAlgorithm, HBAParams
 
@@ -14,47 +16,157 @@ class Plot3DWindow(QWidget):
         self.func_name = func_name
 
         self.setWindowTitle(f"3D HBA - {func_name}")
-        self.setGeometry(150, 150, 800, 600)
+        self.setGeometry(150, 150, 1000, 800)
 
         self.init_ui()
         self.setup_3d_plot()
         self.setup_algorithm()
 
+        self.animation_timer = QTimer()
+        self.animation_timer.timeout.connect(self.step_optimization)
+        self.is_animating = False
+        self.trajectory_history = []
+
     def init_ui(self):
         layout = QVBoxLayout()
-
         top_layout = QHBoxLayout()
 
-        self.btn_run = QPushButton("Run 3D Optimization")
-        self.btn_run.clicked.connect(self.run_optimization)
-        top_layout.addWidget(self.btn_run)
+        self.btn_run_full = QPushButton("Run Full")
+        self.btn_run_full.clicked.connect(self.run_full_optimization)
+        top_layout.addWidget(self.btn_run_full)
 
-        self.btn_animate = QPushButton("Animate")
-        self.btn_animate.clicked.connect(self.toggle_animation)
-        top_layout.addWidget(self.btn_animate)
+        self.btn_step = QPushButton("Step (1 Iter)")
+        self.btn_step.clicked.connect(self.step_optimization)
+        top_layout.addWidget(self.btn_step)
+
+        self.btn_play = QPushButton("▶ Play")
+        self.btn_play.clicked.connect(self.toggle_animation)
+        top_layout.addWidget(self.btn_play)
+
+        self.btn_reset = QPushButton("Reset")
+        self.btn_reset.clicked.connect(self.reset)
+        top_layout.addWidget(self.btn_reset)
+
+        top_layout.addStretch(1)
 
         top_layout.addWidget(QLabel("Population:"))
         self.spin_pop = QSpinBox()
-        self.spin_pop.setRange(10, 100)
-        self.spin_pop.setValue(30)
+        self.spin_pop.setRange(5, 100)
+        self.spin_pop.setValue(20)
         top_layout.addWidget(self.spin_pop)
+
+        top_layout.addWidget(QLabel("Max Iter:"))
+        self.spin_iter = QSpinBox()
+        self.spin_iter.setRange(10, 2000)
+        self.spin_iter.setValue(100)
+        top_layout.addWidget(self.spin_iter)
 
         layout.addLayout(top_layout)
 
+        speed_group = QGroupBox("Simulation Speed")
+        speed_layout = QVBoxLayout()
+
+        slider_row = QHBoxLayout()
+        slider_row.addWidget(QLabel("Fast"))
+        self.speed_slider = QSlider(Qt.Orientation.Horizontal)
+        self.speed_slider.setRange(1, 1000)
+        self.speed_slider.setValue(100)
+        self.speed_slider.valueChanged.connect(self.update_speed)
+        slider_row.addWidget(self.speed_slider)
+        slider_row.addWidget(QLabel("Slow"))
+        speed_layout.addLayout(slider_row)
+
+        label_row = QHBoxLayout()
+        label_row.addStretch(1)
+        self.speed_label = QLabel("100 ms")
+        self.speed_label.setStyleSheet("font-weight: bold;")
+        label_row.addWidget(self.speed_label)
+        label_row.addStretch(1)
+        speed_layout.addLayout(label_row)
+
+        preset_row = QHBoxLayout()
+        preset_row.addStretch(1)
+
+        presets = [
+            ("Turbo", 10),
+            ("Fast", 50),
+            ("Normal", 100),
+            ("Slow", 250),
+            ("Step-by-Step", 1000),
+        ]
+
+        for label, speed in presets:
+            btn = QPushButton(label)
+            btn.setMaximumWidth(80)
+            btn.clicked.connect(lambda checked, s=speed: self.set_speed(s))
+            preset_row.addWidget(btn)
+
+        preset_row.addStretch(1)
+        speed_layout.addLayout(preset_row)
+
+        speed_group.setLayout(speed_layout)
+        layout.addWidget(speed_group)
+        plot_layout = QHBoxLayout()
+
         self.gl_widget = gl.GLViewWidget()
         self.gl_widget.setCameraPosition(distance=50)
-        layout.addWidget(self.gl_widget)
+        self.gl_widget.setBackgroundColor((255, 255, 255, 255))
+        plot_layout.addWidget(self.gl_widget, 2)
+
+        info_widget = QWidget()
+        info_layout = QVBoxLayout(info_widget)
+
+        self.iter_label = QLabel("Iteration: 0/0")
+        self.iter_label.setStyleSheet("font-weight: bold;")
+        info_layout.addWidget(self.iter_label)
+
+        self.best_label = QLabel("Best Fitness: N/A")
+        info_layout.addWidget(self.best_label)
+
+        self.solution_label = QLabel("Best Solution: N/A")
+        info_layout.addWidget(self.solution_label)
+
+        self.state_label = QLabel("Phase: Initialized")
+        info_layout.addWidget(self.state_label)
+
+        self.intensity_label = QLabel("Avg Intensity: N/A")
+        info_layout.addWidget(self.intensity_label)
+
+        cam_group = QGroupBox("Camera Controls")
+        cam_layout = QVBoxLayout()
+
+        reset_cam_btn = QPushButton("Reset Camera")
+        reset_cam_btn.clicked.connect(self.reset_camera)
+        cam_layout.addWidget(reset_cam_btn)
+
+        top_view_btn = QPushButton("Top View")
+        top_view_btn.clicked.connect(lambda: self.set_camera_view('top'))
+        cam_layout.addWidget(top_view_btn)
+
+        side_view_btn = QPushButton("Side View")
+        side_view_btn.clicked.connect(lambda: self.set_camera_view('side'))
+        cam_layout.addWidget(side_view_btn)
+
+        isometric_btn = QPushButton("Isometric")
+        isometric_btn.clicked.connect(lambda: self.set_camera_view('iso'))
+        cam_layout.addWidget(isometric_btn)
+
+        cam_group.setLayout(cam_layout)
+        info_layout.addWidget(cam_group)
+
+        info_layout.addStretch(1)
+        plot_layout.addWidget(info_widget, 1)
+
+        layout.addLayout(plot_layout)
 
         self.status_label = QLabel("Ready for 3D optimization")
         layout.addWidget(self.status_label)
 
         self.setLayout(layout)
 
-        self.animating = False
-        self.animation_step = 0
-
     def setup_3d_plot(self):
-        resolution = 30
+        resolution = 50
+
         x = np.linspace(self.bounds[0], self.bounds[1], resolution)
         y = np.linspace(self.bounds[0], self.bounds[1], resolution)
         X, Y = np.meshgrid(x, y)
@@ -62,106 +174,261 @@ class Plot3DWindow(QWidget):
         Z = np.zeros_like(X)
         for i in range(resolution):
             for j in range(resolution):
-                Z[i, j] = self.func(np.array([X[i, j], Y[i, j], 0]))
+                point = np.array([X[i, j], Y[i, j], 0])
+                Z[i, j] = self.func(point)
+
+        colors = np.zeros((resolution, resolution, 4), dtype=np.float32)
+        z_min, z_max = Z.min(), Z.max()
+
+        for i in range(resolution):
+            for j in range(resolution):
+                t = (Z[i, j] - z_min) / (z_max - z_min) if z_max != z_min else 0.5
+                colors[i, j] = (t, 0.5 - t / 2, 1 - t, 0.7)  # RGBA
 
         self.surface = gl.GLSurfacePlotItem(
             x=x, y=y, z=Z,
+            colors=colors,
             shader='shaded',
-            glOptions='translucent'
+            glOptions='translucent',
+            smooth=True
         )
-        self.surface.scale(1, 1, 0.1)
         self.gl_widget.addItem(self.surface)
 
         self.population_scatter = gl.GLScatterPlotItem(
-            size=10,
-            color=(1, 0, 0, 1)  # Red
+            size=8,
+            color=(1, 0, 0, 0.8),
+            pxMode=True
         )
         self.gl_widget.addItem(self.population_scatter)
 
         self.best_scatter = gl.GLScatterPlotItem(
-            size=15,
-            color=(0, 1, 0, 1)
+            size=12,
+            color=(0, 1, 0, 1.0),  # Green
+            pxMode=True
         )
         self.gl_widget.addItem(self.best_scatter)
 
-        self.trajectory_lines = gl.GLLinePlotItem(
-            width=2,
-            color=(0, 0, 1, 0.5)
+        self.trajectory_lines = []
+        self.add_coordinate_axes()
+
+    def add_coordinate_axes(self):
+        x_axis = gl.GLLinePlotItem(
+            pos=np.array([[self.bounds[0], 0, 0], [self.bounds[1], 0, 0]]),
+            color=(1, 0, 0, 1),
+            width=2
         )
-        self.gl_widget.addItem(self.trajectory_lines)
+        self.gl_widget.addItem(x_axis)
+
+        y_axis = gl.GLLinePlotItem(
+            pos=np.array([[0, self.bounds[0], 0], [0, self.bounds[1], 0]]),
+            color=(0, 1, 0, 1),
+            width=2
+        )
+        self.gl_widget.addItem(y_axis)
+        z_scale = 10
+        z_axis = gl.GLLinePlotItem(
+            pos=np.array([[0, 0, 0], [0, 0, (self.bounds[1] - self.bounds[0]) * z_scale]]),
+            color=(0, 0, 1, 1),
+            width=2
+        )
+        self.gl_widget.addItem(z_axis)
 
     def setup_algorithm(self):
         params = HBAParams(
             pop_size=self.spin_pop.value(),
-            max_iter=200
+            max_iter=self.spin_iter.value()
         )
         self.hba = HoneyBadgerAlgorithm(params)
-        self.hba.initialize_population(3, self.bounds)
+
+        if len(self.optimum) == 3:
+            dim = 3
+        else:
+            dim = 2
+
+        self.hba.set_optimization_problem(self.func, dim, self.bounds)
+        self.update_info()
         self.update_3d_plot()
 
     def update_3d_plot(self):
-        if self.hba.population is not None:
-            pos = np.zeros((self.hba.population.shape[0], 3))
-            pos[:, :2] = self.hba.population[:, :2]
-            pos[:, 2] = np.array([self.func(ind) * 10 for ind in self.hba.population])
+        if self.hba.population is None:
+            return
+        if hasattr(self.hba, 'previous_population') and self.hba.previous_population is not None:
+            self.update_trajectories()
+        pop = self.hba.population
+        fitness_values = np.array([self.func(ind) for ind in pop])
+        pop_positions = np.zeros((pop.shape[0], 3))
 
-            self.population_scatter.setData(pos=pos)
-            if self.hba.best_solution is not None:
-                best_pos = np.zeros((1, 3))
-                best_pos[0, :2] = self.hba.best_solution[:2]
-                best_pos[0, 2] = self.func(self.hba.best_solution) * 10
-                self.best_scatter.setData(pos=best_pos)
-
-    def run_optimization(self):
-        self.btn_run.setEnabled(False)
-        self.status_label.setText("Running 3D optimization...")
-
-        params = HBAParams(
-            pop_size=self.spin_pop.value(),
-            max_iter=100
-        )
-        self.hba = HoneyBadgerAlgorithm(params)
-
-        def func_3d(x):
-            if len(x) == 3:
-                return self.func(x)
-            else:
-                x_full = np.zeros(3)
-                x_full[:len(x)] = x
-                return self.func(x_full)
-
-        best_solution, best_fitness = self.hba.optimize(
-            func_3d, 3, self.bounds
-        )
-
-        self.update_3d_plot()
-        self.status_label.setText(
-            f"3D Optimization complete! Best fitness: {best_fitness:.6f}"
-        )
-        self.btn_run.setEnabled(True)
-
-    def toggle_animation(self):
-        if not self.animating:
-            self.animating = True
-            self.btn_animate.setText("Stop Animation")
-            self.animate_optimization()
+        if pop.shape[1] == 3:
+            pop_positions = pop.copy()
         else:
-            self.animating = False
-            self.btn_animate.setText("Animate")
+            pop_positions[:, :2] = pop[:, :2]
+            pop_positions[:, 2] = fitness_values * 10
 
-    def animate_optimization(self):
-        """Animate the optimization process step by step"""
-        if not self.animating:
+        self.population_scatter.setData(
+            pos=pop_positions,
+            color=(1, 0, 0, 0.8),  # Red
+            size=8
+        )
+
+        if self.hba.best_solution is not None:
+            best = self.hba.best_solution
+            best_fitness = self.func(best)
+
+            best_pos = np.zeros((1, 3))
+            if len(best) == 3:
+                best_pos[0] = best
+            else:
+                best_pos[0, :2] = best[:2]
+                best_pos[0, 2] = best_fitness * 10
+
+            self.best_scatter.setData(
+                pos=best_pos,
+                color=(0, 1, 0, 1.0),  # Green
+                size=12
+            )
+
+    def update_trajectories(self):
+        if len(self.trajectory_history) > 20:
+            for line in self.trajectory_history[0]:
+                self.gl_widget.removeItem(line)
+            self.trajectory_history.pop(0)
+
+        new_lines = []
+        pop = self.hba.population
+        prev_pop = self.hba.previous_population
+
+        for i in range(pop.shape[0]):
+            if len(pop[i]) == 3:
+                start = prev_pop[i]
+                end = pop[i]
+            else:
+                start = np.zeros(3)
+                end = np.zeros(3)
+                start[:2] = prev_pop[i, :2]
+                start[2] = self.func(prev_pop[i]) * 10
+                end[:2] = pop[i, :2]
+                end[2] = self.func(pop[i]) * 10
+
+            if np.linalg.norm(end - start) > 0.01:
+                line = gl.GLLinePlotItem(
+                    pos=np.array([start, end]),
+                    color=(0, 0, 1, 0.3),
+                    width=1,
+                    antialias=True
+                )
+                self.gl_widget.addItem(line)
+                new_lines.append(line)
+
+        self.trajectory_history.append(new_lines)
+
+    def update_info(self):
+        self.iter_label.setText(f"Iteration: {self.hba.current_iter}/{self.hba.params.max_iter}")
+        self.best_label.setText(f"Best Fitness: {self.hba.best_fitness:.6f}")
+
+        if self.hba.best_solution is not None:
+            sol = self.hba.best_solution
+            if len(sol) == 3:
+                self.solution_label.setText(
+                    f"Best Solution: [{sol[0]:.4f}, {sol[1]:.4f}, {sol[2]:.4f}]"
+                )
+            else:
+                self.solution_label.setText(
+                    f"Best Solution: [{sol[0]:.4f}, {sol[1]:.4f}]"
+                )
+
+        if hasattr(self.hba, 'current_phase'):
+            phase = self.hba.current_phase
+        else:
+            alpha = self.hba.update_density_factor()
+            phase = "Digging (Exploration)" if alpha > 0.5 else "Honey (Exploitation)"
+        self.state_label.setText(f"Phase: {phase}")
+
+        if hasattr(self.hba, 'last_intensity') and self.hba.last_intensity is not None:
+            avg_intensity = np.mean(self.hba.last_intensity)
+            self.intensity_label.setText(f"Avg Intensity: {avg_intensity:.4e}")
+
+    def step_optimization(self):
+        """Run a single iteration"""
+        if self.hba.current_iter >= self.hba.params.max_iter:
+            self.status_label.setText("Optimization complete!")
+            if self.is_animating:
+                self.toggle_animation()
             return
 
-        if self.animation_step < self.hba.params.max_iter:
-            self.hba.run_one_iteration()
-            self.update_3d_plot()
-            self.animation_step += 1
+        self.hba.previous_population = self.hba.population.copy()
+        self.hba.run_one_iteration()
 
-            from PyQt6.QtCore import QTimer
-            QTimer.singleShot(50, self.animate_optimization)
+        self.update_3d_plot()
+        self.update_info()
+
+        self.status_label.setText(f"Step {self.hba.current_iter} complete")
+
+    def run_full_optimization(self):
+        self.btn_run_full.setEnabled(False)
+        self.btn_play.setEnabled(False)
+        self.btn_step.setEnabled(False)
+        self.status_label.setText("Running full optimization...")
+
+        remaining = self.hba.params.max_iter - self.hba.current_iter
+        for i in range(remaining):
+            self.hba.previous_population = self.hba.population.copy()
+            self.hba.run_one_iteration()
+
+        self.update_3d_plot()
+        self.update_info()
+
+        self.status_label.setText(f"Full optimization complete in {remaining} steps")
+        self.btn_run_full.setEnabled(True)
+        self.btn_play.setEnabled(True)
+        self.btn_step.setEnabled(True)
+
+    def toggle_animation(self):
+        if not self.is_animating:
+            self.is_animating = True
+            self.btn_play.setText("⏸ Pause")
+            self.btn_run_full.setEnabled(False)
+            self.btn_step.setEnabled(False)
+            self.animation_timer.start(self.speed_slider.value())
         else:
-            self.animating = False
-            self.btn_animate.setText("Animate")
-            self.animation_step = 0
+            self.is_animating = False
+            self.btn_play.setText("▶ Play")
+            self.btn_run_full.setEnabled(True)
+            self.btn_step.setEnabled(True)
+            self.animation_timer.stop()
+
+    def update_speed(self):
+        speed = self.speed_slider.value()
+        self.speed_label.setText(f"{speed} ms")
+        if self.is_animating:
+            self.animation_timer.setInterval(speed)
+        if speed > 0:
+            fps = 1000 / speed
+            self.speed_slider.setToolTip(f"Speed: {speed}ms ({fps:.1f} FPS)")
+
+    def set_speed(self, speed_ms: int):
+        self.speed_slider.setValue(speed_ms)
+        self.update_speed()
+
+    def reset_camera(self):
+        self.gl_widget.setCameraPosition(distance=50, elevation=30, azimuth=45)
+
+    def set_camera_view(self, view_type: str):
+        if view_type == 'top':
+            self.gl_widget.setCameraPosition(distance=50, elevation=90, azimuth=0)
+        elif view_type == 'side':
+            self.gl_widget.setCameraPosition(distance=50, elevation=0, azimuth=90)
+        elif view_type == 'iso':
+            self.gl_widget.setCameraPosition(distance=50, elevation=30, azimuth=45)
+
+    def reset(self):
+        if self.is_animating:
+            self.toggle_animation()
+
+        for step_lines in self.trajectory_history:
+            for line in step_lines:
+                self.gl_widget.removeItem(line)
+        self.trajectory_history = []
+
+        self.setup_algorithm()
+        self.reset_camera()
+        self.status_label.setText("Reset complete")
