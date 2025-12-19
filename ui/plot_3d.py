@@ -29,6 +29,7 @@ class Plot3DWindow(QWidget):
 
     def init_ui(self):
         layout = QVBoxLayout()
+
         top_layout = QHBoxLayout()
 
         self.btn_run_full = QPushButton("Run Full")
@@ -106,11 +107,15 @@ class Plot3DWindow(QWidget):
 
         speed_group.setLayout(speed_layout)
         layout.addWidget(speed_group)
+
         plot_layout = QHBoxLayout()
 
         self.gl_widget = gl.GLViewWidget()
-        self.gl_widget.setCameraPosition(distance=50)
-        self.gl_widget.setBackgroundColor((255, 255, 255, 255))
+        self.gl_widget.setBackgroundColor('w')
+        self.gl_widget.opts['distance'] = 80
+        self.gl_widget.opts['elevation'] = 30
+        self.gl_widget.opts['azimuth'] = 45
+        self.gl_widget.setCameraPosition(distance=80, elevation=30, azimuth=45)
         plot_layout.addWidget(self.gl_widget, 2)
 
         info_widget = QWidget()
@@ -151,6 +156,14 @@ class Plot3DWindow(QWidget):
         isometric_btn.clicked.connect(lambda: self.set_camera_view('iso'))
         cam_layout.addWidget(isometric_btn)
 
+        zoom_in_btn = QPushButton("Zoom In")
+        zoom_in_btn.clicked.connect(self.zoom_in)
+        cam_layout.addWidget(zoom_in_btn)
+
+        zoom_out_btn = QPushButton("Zoom Out")
+        zoom_out_btn.clicked.connect(self.zoom_out)
+        cam_layout.addWidget(zoom_out_btn)
+
         cam_group.setLayout(cam_layout)
         info_layout.addWidget(cam_group)
 
@@ -165,8 +178,7 @@ class Plot3DWindow(QWidget):
         self.setLayout(layout)
 
     def setup_3d_plot(self):
-        resolution = 50
-
+        resolution = 300
         x = np.linspace(self.bounds[0], self.bounds[1], resolution)
         y = np.linspace(self.bounds[0], self.bounds[1], resolution)
         X, Y = np.meshgrid(x, y)
@@ -174,64 +186,80 @@ class Plot3DWindow(QWidget):
         Z = np.zeros_like(X)
         for i in range(resolution):
             for j in range(resolution):
-                point = np.array([X[i, j], Y[i, j], 0])
-                Z[i, j] = self.func(point)
+                if len(self.optimum) == 3:
+                    Z[i, j] = self.func(np.array([X[i, j], Y[i, j], 0]))
+                else:
+                    Z[i, j] = self.func(np.array([X[i, j], Y[i, j]]))
 
-        colors = np.zeros((resolution, resolution, 4), dtype=np.float32)
         z_min, z_max = Z.min(), Z.max()
 
-        for i in range(resolution):
-            for j in range(resolution):
-                t = (Z[i, j] - z_min) / (z_max - z_min) if z_max != z_min else 0.5
-                colors[i, j] = (t, 0.5 - t / 2, 1 - t, 0.7)  # RGBA
-
-        self.surface = gl.GLSurfacePlotItem(
-            x=x, y=y, z=Z,
-            colors=colors,
-            shader='shaded',
-            glOptions='translucent',
-            smooth=True
+        self.surface = gl.GLMeshItem(
+            vertexes=np.array([X.flatten(), Y.flatten(), Z.flatten()]).T,
+            faces=np.array([
+                               [i, i + 1, i + resolution + 1]
+                               for i in range(0, resolution * (resolution - 1) - 1)
+                               if (i + 1) % resolution != 0
+                           ] + [
+                               [i + 1, i + resolution + 1, i + resolution]
+                               for i in range(0, resolution * (resolution - 1) - 1)
+                               if (i + 1) % resolution != 0
+                           ]),
+            vertexColors=np.array([
+                (0.2 + 0.8 * (z - z_min) / (z_max - z_min) if z_max > z_min else 0.6,
+                 0.5 - 0.5 * (z - z_min) / (z_max - z_min) if z_max > z_min else 0.4,
+                 1.0 - 0.8 * (z - z_min) / (z_max - z_min) if z_max > z_min else 0.2,
+                 1.0)
+                for z in Z.flatten()
+            ]),
+            smooth=True,
+            drawEdges=False,
+            drawFaces=True,
+            shader='shaded'
         )
         self.gl_widget.addItem(self.surface)
 
-        self.population_scatter = gl.GLScatterPlotItem(
-            size=8,
-            color=(1, 0, 0, 0.8),
-            pxMode=True
-        )
-        self.gl_widget.addItem(self.population_scatter)
+        bounds_range = self.bounds[1] - self.bounds[0]
+        axis_length = bounds_range * 0.6
 
-        self.best_scatter = gl.GLScatterPlotItem(
-            size=12,
-            color=(0, 1, 0, 1.0),  # Green
-            pxMode=True
-        )
-        self.gl_widget.addItem(self.best_scatter)
-
-        self.trajectory_lines = []
-        self.add_coordinate_axes()
-
-    def add_coordinate_axes(self):
         x_axis = gl.GLLinePlotItem(
-            pos=np.array([[self.bounds[0], 0, 0], [self.bounds[1], 0, 0]]),
+            pos=np.array([[-axis_length, 0, 0], [axis_length, 0, 0]]),
             color=(1, 0, 0, 1),
-            width=2
+            width=3,
+            glOptions='opaque'
         )
         self.gl_widget.addItem(x_axis)
 
         y_axis = gl.GLLinePlotItem(
-            pos=np.array([[0, self.bounds[0], 0], [0, self.bounds[1], 0]]),
+            pos=np.array([[0, -axis_length, 0], [0, axis_length, 0]]),
             color=(0, 1, 0, 1),
-            width=2
+            width=3,
+            glOptions='opaque'
         )
         self.gl_widget.addItem(y_axis)
-        z_scale = 10
+
         z_axis = gl.GLLinePlotItem(
-            pos=np.array([[0, 0, 0], [0, 0, (self.bounds[1] - self.bounds[0]) * z_scale]]),
+            pos=np.array([[0, 0, z_min], [0, 0, z_max]]),
             color=(0, 0, 1, 1),
-            width=2
+            width=3,
+            glOptions='opaque'
         )
         self.gl_widget.addItem(z_axis)
+
+        self.population_scatter = gl.GLScatterPlotItem(
+            size=15,
+            color=(1, 0, 0, 1),
+            pxMode=True,
+            glOptions='opaque'
+        )
+        self.gl_widget.addItem(self.population_scatter)
+
+        self.best_scatter = gl.GLScatterPlotItem(
+            size=25,
+            color=(0, 1, 0, 1),
+            pxMode=True,
+            glOptions='opaque'
+        )
+        self.gl_widget.addItem(self.best_scatter)
 
     def setup_algorithm(self):
         params = HBAParams(
@@ -252,22 +280,25 @@ class Plot3DWindow(QWidget):
     def update_3d_plot(self):
         if self.hba.population is None:
             return
+
         if hasattr(self.hba, 'previous_population') and self.hba.previous_population is not None:
             self.update_trajectories()
+
         pop = self.hba.population
         fitness_values = np.array([self.func(ind) for ind in pop])
+
         pop_positions = np.zeros((pop.shape[0], 3))
 
         if pop.shape[1] == 3:
             pop_positions = pop.copy()
         else:
             pop_positions[:, :2] = pop[:, :2]
-            pop_positions[:, 2] = fitness_values * 10
+            pop_positions[:, 2] = fitness_values
 
         self.population_scatter.setData(
             pos=pop_positions,
-            color=(1, 0, 0, 0.8),  # Red
-            size=8
+            color=(1, 0, 0, 1),
+            size=12
         )
 
         if self.hba.best_solution is not None:
@@ -279,16 +310,16 @@ class Plot3DWindow(QWidget):
                 best_pos[0] = best
             else:
                 best_pos[0, :2] = best[:2]
-                best_pos[0, 2] = best_fitness * 10
+                best_pos[0, 2] = best_fitness
 
             self.best_scatter.setData(
                 pos=best_pos,
-                color=(0, 1, 0, 1.0),  # Green
-                size=12
+                color=(0, 1, 0, 1),
+                size=20
             )
 
     def update_trajectories(self):
-        if len(self.trajectory_history) > 20:
+        if len(self.trajectory_history) > 10:
             for line in self.trajectory_history[0]:
                 self.gl_widget.removeItem(line)
             self.trajectory_history.pop(0)
@@ -305,15 +336,15 @@ class Plot3DWindow(QWidget):
                 start = np.zeros(3)
                 end = np.zeros(3)
                 start[:2] = prev_pop[i, :2]
-                start[2] = self.func(prev_pop[i]) * 10
+                start[2] = self.func(prev_pop[i])
                 end[:2] = pop[i, :2]
-                end[2] = self.func(pop[i]) * 10
+                end[2] = self.func(pop[i])
 
-            if np.linalg.norm(end - start) > 0.01:
+            if np.linalg.norm(end - start) > 0.001:
                 line = gl.GLLinePlotItem(
                     pos=np.array([start, end]),
-                    color=(0, 0, 1, 0.3),
-                    width=1,
+                    color=(0, 0, 1, 0.4),
+                    width=2,
                     antialias=True
                 )
                 self.gl_widget.addItem(line)
@@ -340,7 +371,7 @@ class Plot3DWindow(QWidget):
             phase = self.hba.current_phase
         else:
             alpha = self.hba.update_density_factor()
-            phase = "Digging (Exploration)" if alpha > 0.5 else "Honey (Exploitation)"
+            phase = "Digging" if alpha > 0.5 else "Honey"
         self.state_label.setText(f"Phase: {phase}")
 
         if hasattr(self.hba, 'last_intensity') and self.hba.last_intensity is not None:
@@ -348,7 +379,6 @@ class Plot3DWindow(QWidget):
             self.intensity_label.setText(f"Avg Intensity: {avg_intensity:.4e}")
 
     def step_optimization(self):
-        """Run a single iteration"""
         if self.hba.current_iter >= self.hba.params.max_iter:
             self.status_label.setText("Optimization complete!")
             if self.is_animating:
@@ -357,10 +387,8 @@ class Plot3DWindow(QWidget):
 
         self.hba.previous_population = self.hba.population.copy()
         self.hba.run_one_iteration()
-
         self.update_3d_plot()
         self.update_info()
-
         self.status_label.setText(f"Step {self.hba.current_iter} complete")
 
     def run_full_optimization(self):
@@ -376,7 +404,6 @@ class Plot3DWindow(QWidget):
 
         self.update_3d_plot()
         self.update_info()
-
         self.status_label.setText(f"Full optimization complete in {remaining} steps")
         self.btn_run_full.setEnabled(True)
         self.btn_play.setEnabled(True)
@@ -410,15 +437,23 @@ class Plot3DWindow(QWidget):
         self.update_speed()
 
     def reset_camera(self):
-        self.gl_widget.setCameraPosition(distance=50, elevation=30, azimuth=45)
+        self.gl_widget.setCameraPosition(distance=80, elevation=30, azimuth=45)
 
     def set_camera_view(self, view_type: str):
         if view_type == 'top':
-            self.gl_widget.setCameraPosition(distance=50, elevation=90, azimuth=0)
+            self.gl_widget.setCameraPosition(distance=80, elevation=90, azimuth=0)
         elif view_type == 'side':
-            self.gl_widget.setCameraPosition(distance=50, elevation=0, azimuth=90)
+            self.gl_widget.setCameraPosition(distance=80, elevation=0, azimuth=90)
         elif view_type == 'iso':
-            self.gl_widget.setCameraPosition(distance=50, elevation=30, azimuth=45)
+            self.gl_widget.setCameraPosition(distance=80, elevation=30, azimuth=45)
+
+    def zoom_in(self):
+        current_distance = self.gl_widget.opts['distance']
+        self.gl_widget.setCameraPosition(distance=max(10, current_distance * 0.8))
+
+    def zoom_out(self):
+        current_distance = self.gl_widget.opts['distance']
+        self.gl_widget.setCameraPosition(distance=min(200, current_distance * 1.2))
 
     def reset(self):
         if self.is_animating:
