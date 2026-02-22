@@ -1,17 +1,18 @@
 from datetime import datetime
-from core.recording import OptimizationRecording
-from PyQt6.QtWidgets import QFileDialog
+from pathlib import Path
+
 import numpy as np
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout,
                              QPushButton, QLabel, QSpinBox, QSlider,
                              QGroupBox, QComboBox, QGridLayout, QSplitter,
-                             QCheckBox, QLineEdit, QScrollArea)
+                             QCheckBox, QLineEdit, QScrollArea, QFileDialog)
 from PyQt6.QtCore import Qt, QTimer
 import pyqtgraph as pg
 
 from core.export_data import DataExporter
-from core.functions import TEST_FUNCTIONS_2D, TEST_FUNCTIONS_3D, TEST_FUNCTIONS_5D
+from core.functions import TEST_FUNCTIONS_2D, TEST_FUNCTIONS_3D, TEST_FUNCTIONS_5D, get_function_2d_grid
 from core.honey_badger import HoneyBadgerAlgorithm, HBAParams
+from core.recording import OptimizationRecording
 
 
 class VariableSlider(QWidget):
@@ -23,11 +24,6 @@ class VariableSlider(QWidget):
         self.max_val = max_val
         self.parent_tab = parent_tab
         self.updating = False
-
-        self.recording = None
-        self.is_recording = False
-        self.playback_mode = False
-        self.current_playback_step = 0
 
         layout = QHBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
@@ -103,6 +99,12 @@ class Tab2D(QWidget):
         self.fixed_values = []
         self.selected_vars = [0, 1]
 
+        self.recording = None
+        self.is_recording = False
+        self.playback_mode = False
+        self.current_playback_step = 0
+        self.best_point = None
+
         self.init_ui()
         self.setup_default_function()
 
@@ -117,7 +119,6 @@ class Tab2D(QWidget):
 
         self.var_panel = self.create_variable_panel()
         main_layout.addWidget(self.var_panel)
-
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
@@ -209,12 +210,47 @@ class Tab2D(QWidget):
         self.speed_slider.valueChanged.connect(self.update_speed)
         layout.addWidget(self.speed_slider, btn_row, 6)
 
-        # Add playback controls in a new row
         playback_row = 2
         self.add_playback_controls(layout, playback_row, 0)
 
         panel.setLayout(layout)
         return panel
+
+    def add_playback_controls(self, layout, row, col):
+        """Add recording and playback controls"""
+        self.btn_record = QPushButton("● Record")
+        self.btn_record.setStyleSheet("color: red; font-weight: bold;")
+        self.btn_record.clicked.connect(self.toggle_recording)
+        self.btn_record.setEnabled(False)
+        layout.addWidget(self.btn_record, row, col)
+        col += 1
+
+        self.btn_save_recording = QPushButton("💾 Save")
+        self.btn_save_recording.clicked.connect(self.save_recording)
+        self.btn_save_recording.setEnabled(False)
+        layout.addWidget(self.btn_save_recording, row, col)
+        col += 1
+
+        self.btn_load_recording = QPushButton("📂 Load")
+        self.btn_load_recording.clicked.connect(self.load_recording)
+        layout.addWidget(self.btn_load_recording, row, col)
+        col += 1
+
+        self.btn_prev = QPushButton("◀ Prev")
+        self.btn_prev.clicked.connect(self.prev_step)
+        self.btn_prev.setEnabled(False)
+        layout.addWidget(self.btn_prev, row, col)
+        col += 1
+
+        self.btn_next = QPushButton("Next ▶")
+        self.btn_next.clicked.connect(self.next_step)
+        self.btn_next.setEnabled(False)
+        layout.addWidget(self.btn_next, row, col)
+        col += 1
+
+        self.step_label = QLabel("Step: 0/0")
+        layout.addWidget(self.step_label, row, col)
+        col += 1
 
     def create_variable_panel(self):
         panel = QGroupBox("Variable Controls (Select 2 variables for 2D plot)")
@@ -269,6 +305,13 @@ class Tab2D(QWidget):
         cursor_group.setLayout(cursor_layout)
         layout.addWidget(cursor_group)
 
+        constants_group = QGroupBox("Fixed Variables")
+        constants_layout = QVBoxLayout()
+        self.constants_label = QLabel("None")
+        constants_layout.addWidget(self.constants_label)
+        constants_group.setLayout(constants_layout)
+        layout.addWidget(constants_group)
+
         layout.addStretch()
         return panel
 
@@ -291,7 +334,6 @@ class Tab2D(QWidget):
             self.func_dim = 2
 
         bounds_list = [self.bounds] * self.func_dim
-
         self.fixed_values = [0.0] * self.func_dim
 
         for i in range(self.func_dim):
@@ -304,9 +346,9 @@ class Tab2D(QWidget):
             self.variable_sliders.append(slider)
             self.fixed_values[i] = initial
 
-        if len(self.variable_sliders) >= 2:
-            self.variable_sliders[0].checkbox.setChecked(True)
-            self.variable_sliders[1].checkbox.setChecked(True)
+        num_to_select = min(2, len(self.variable_sliders))
+        for i in range(num_to_select):
+            self.variable_sliders[i].checkbox.setChecked(True)
 
     def update_selected_variables(self):
         selected = []
@@ -329,23 +371,37 @@ class Tab2D(QWidget):
                 slider.set_active(True)
 
         if len(self.selected_vars) < 2:
-            for i in range(min(2, len(self.variable_sliders))):
-                if i not in self.selected_vars:
+            needed = 2 - len(self.selected_vars)
+            for i in range(len(self.variable_sliders)):
+                if i not in self.selected_vars and needed > 0:
                     self.variable_sliders[i].checkbox.setChecked(True)
                     self.selected_vars.append(i)
                     self.variable_sliders[i].set_active(False)
+                    needed -= 1
 
+        self.update_constants_display()
         self.on_variable_changed()
+
+    def update_constants_display(self):
+        fixed_vars = []
+        for i, slider in enumerate(self.variable_sliders):
+            if not slider.checkbox.isChecked():
+                fixed_vars.append(f"x{i + 1}={slider.get_value():.3f}")
+
+        if fixed_vars:
+            self.constants_label.setText("Fixed: " + ", ".join(fixed_vars))
+        else:
+            self.constants_label.setText("Fixed variables: None")
 
     def on_variable_changed(self):
         for i, slider in enumerate(self.variable_sliders):
             if not slider.checkbox.isChecked():
                 self.fixed_values[i] = slider.get_value()
 
+        self.update_constants_display()
         self.plot_function_surface()
 
     def create_reduced_function(self):
-
         def reduced_func(x, y):
             full_input = self.fixed_values.copy()
             while len(full_input) < self.func_dim:
@@ -355,10 +411,13 @@ class Tab2D(QWidget):
             if len(self.selected_vars) >= 2:
                 full_input[self.selected_vars[0]] = x
                 full_input[self.selected_vars[1]] = y
+            elif len(self.selected_vars) == 1:
+                full_input[self.selected_vars[0]] = x
 
             return self.func(np.array(full_input))
 
         return reduced_func
+
     def setup_default_function(self):
         self.func_name = list(TEST_FUNCTIONS_2D.keys())[0]
         self.func, self.bounds, self.optimum = TEST_FUNCTIONS_2D[self.func_name]
@@ -371,13 +430,10 @@ class Tab2D(QWidget):
 
         if func_name in TEST_FUNCTIONS_2D:
             self.func, self.bounds, self.optimum = TEST_FUNCTIONS_2D[func_name]
-            self.func_dim = 2
         elif func_name in TEST_FUNCTIONS_3D:
             self.func, self.bounds, self.optimum = TEST_FUNCTIONS_3D[func_name]
-            self.func_dim = 3
         else:
             self.func, self.bounds, self.optimum = TEST_FUNCTIONS_5D[func_name]
-            self.func_dim = 5
 
         self.setup_variable_controls()
         self.plot_function_surface()
@@ -388,6 +444,8 @@ class Tab2D(QWidget):
         self.plot_widget.clear()
 
         if len(self.selected_vars) < 2:
+            text = pg.TextItem("Select 2 variables for 2D plot", color='k', anchor=(0.5, 0.5))
+            self.plot_widget.addItem(text)
             return
 
         plot_func = self.create_reduced_function()
@@ -447,17 +505,12 @@ class Tab2D(QWidget):
             self.opt_label.setText(f"f({opt_str}) = {self.func(self.optimum):.3f}")
 
     def initialize(self):
-        if self.func_dim == 2:
-            opt_bounds = self.bounds
-        else:
-            opt_bounds = self.bounds
-
         params = HBAParams(
             pop_size=self.spin_pop.value(),
             max_iter=self.spin_iter.value()
         )
         self.hba = HoneyBadgerAlgorithm(params)
-        self.hba.set_optimization_problem(self.func, self.func_dim, opt_bounds)
+        self.hba.set_optimization_problem(self.func, self.func_dim, self.bounds)
 
         self.btn_step.setEnabled(True)
         self.btn_play.setEnabled(True)
@@ -465,13 +518,42 @@ class Tab2D(QWidget):
         self.btn_record.setEnabled(True)
         self.btn_init.setEnabled(False)
 
+        self.playback_mode = False
         self.convergence_plot.clear()
         for line in self.trail_lines:
             self.plot_widget.removeItem(line)
         self.trail_lines = []
+        if self.best_point:
+            self.plot_widget.removeItem(self.best_point)
+            self.best_point = None
 
         self.update_display()
         self.update_population_plot()
+
+    def step_optimization(self):
+        if self.hba is None or self.playback_mode:
+            return
+
+        if self.hba.current_iter >= self.hba.params.max_iter:
+            if self.is_animating:
+                self.toggle_animation()
+            return
+
+        if hasattr(self.hba, 'population'):
+            self.hba.previous_population = self.hba.population.copy()
+
+        self.hba.run_one_iteration()
+
+        if self.is_recording and self.recording:
+            self.recording.record_step(
+                self.hba.population,
+                self.hba.best_solution,
+                self.hba.best_fitness
+            )
+
+        self.update_population_plot()
+        self.update_display()
+        self.plot_convergence()
 
     def update_population_plot(self):
         if self.hba is None or self.hba.population is None or len(self.selected_vars) < 2:
@@ -480,6 +562,19 @@ class Tab2D(QWidget):
         x = self.hba.population[:, self.selected_vars[0]]
         y = self.hba.population[:, self.selected_vars[1]]
         self.population_scatter.setData(x, y)
+
+        if self.best_point:
+            self.plot_widget.removeItem(self.best_point)
+
+        if self.hba.best_solution is not None:
+            best_x = self.hba.best_solution[self.selected_vars[0]]
+            best_y = self.hba.best_solution[self.selected_vars[1]]
+            self.best_point = pg.ScatterPlotItem(
+                [best_x], [best_y],
+                pen=pg.mkPen('g', width=3), brush=pg.mkBrush('g'),
+                size=20, symbol='star'
+            )
+            self.plot_widget.addItem(self.best_point)
 
         if hasattr(self.hba, 'previous_population') and self.hba.previous_population is not None:
             for line in self.trail_lines:
@@ -511,31 +606,6 @@ class Tab2D(QWidget):
         phase = getattr(self.hba, 'current_phase', 'Unknown')
         self.phase_label.setText(f"Phase: {phase}")
 
-    def step_optimization(self):
-        if self.hba is None or self.playback_mode:
-            return
-
-        if self.hba.current_iter >= self.hba.params.max_iter:
-            if self.is_animating:
-                self.toggle_animation()
-            return
-
-        if hasattr(self.hba, 'population'):
-            self.hba.previous_population = self.hba.population.copy()
-
-        self.hba.run_one_iteration()
-
-        if self.is_recording and self.recording:
-            self.recording.record_step(
-                self.hba.population,
-                self.hba.best_solution,
-                self.hba.best_fitness
-            )
-
-        self.update_population_plot()
-        self.update_display()
-        self.plot_convergence()
-
     def plot_convergence(self):
         if self.hba and len(self.hba.convergence_curve) > 0:
             self.convergence_plot.clear()
@@ -556,96 +626,6 @@ class Tab2D(QWidget):
     def update_speed(self):
         if self.is_animating:
             self.animation_timer.setInterval(self.speed_slider.value())
-
-    def reset(self):
-        if self.is_animating:
-            self.toggle_animation()
-
-        self.hba = None
-        self.playback_mode = False
-        self.is_recording = False
-        self.btn_record.setText("● Record")
-        self.btn_record.setStyleSheet("color: red; font-weight: bold;")
-        self.btn_record.setEnabled(False)
-        self.btn_save_recording.setEnabled(False)
-        self.btn_prev.setEnabled(False)
-        self.btn_next.setEnabled(False)
-        self.btn_step.setEnabled(False)
-        self.btn_play.setEnabled(False)
-        self.btn_export.setEnabled(False)
-        self.btn_init.setEnabled(True)
-        self.step_label.setText("Step: 0/0")
-
-        if hasattr(self, 'population_scatter'):
-            self.population_scatter.setData([], [])
-        if hasattr(self, 'best_point'):
-            self.plot_widget.removeItem(self.best_point)
-        for line in self.trail_lines:
-            self.plot_widget.removeItem(line)
-        self.trail_lines = []
-        self.convergence_plot.clear()
-
-        self.iter_label.setText("Iteration: 0/0")
-        self.best_label.setText("Best Fitness: N/A")
-        self.solution_label.setText("Best Solution: N/A")
-        self.phase_label.setText("Phase: Not started")
-
-    def export_results(self):
-        if self.hba is None:
-            return
-
-        export_data = {
-            'function_name': self.func_name,
-            'bounds': self.bounds,
-            'optimum': self.optimum.tolist(),
-            'optimization_results': self.hba.get_optimization_history(),
-            'timestamp': datetime.now().isoformat(),
-            'selected_variables': self.selected_vars,
-            'fixed_values': self.fixed_values
-        }
-
-        filename = f"{self.func_name.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-        DataExporter.export_to_json(export_data, filename, subfolder="benchmark_2d")
-
-    def on_tab_selected(self):
-        pass
-
-    def add_playback_controls(self, layout, btn_row, next_col):
-        self.btn_record = QPushButton("● Record")
-        self.btn_record.setStyleSheet("color: red; font-weight: bold;")
-        self.btn_record.clicked.connect(self.toggle_recording)
-        self.btn_record.setEnabled(False)
-        layout.addWidget(self.btn_record, btn_row, next_col)
-        next_col += 1
-
-        self.btn_save_recording = QPushButton("💾 Save")
-        self.btn_save_recording.clicked.connect(self.save_recording)
-        self.btn_save_recording.setEnabled(False)
-        layout.addWidget(self.btn_save_recording, btn_row, next_col)
-        next_col += 1
-
-        self.btn_load_recording = QPushButton("📂 Load")
-        self.btn_load_recording.clicked.connect(self.load_recording)
-        layout.addWidget(self.btn_load_recording, btn_row, next_col)
-        next_col += 1
-
-        self.btn_prev = QPushButton("◀ Prev")
-        self.btn_prev.clicked.connect(self.prev_step)
-        self.btn_prev.setEnabled(False)
-        layout.addWidget(self.btn_prev, btn_row, next_col)
-        next_col += 1
-
-        self.btn_next = QPushButton("Next ▶")
-        self.btn_next.clicked.connect(self.next_step)
-        self.btn_next.setEnabled(False)
-        layout.addWidget(self.btn_next, btn_row, next_col)
-        next_col += 1
-
-        self.step_label = QLabel("Step: 0/0")
-        layout.addWidget(self.step_label, btn_row, next_col)
-        next_col += 1
-
-        return next_col
 
     def toggle_recording(self):
         if not self.is_recording:
@@ -681,7 +661,7 @@ class Tab2D(QWidget):
             )
             if filename:
                 self.recording.save(filename)
-                self.status_label.setText(f"Recording saved to {filename}")
+                self.iter_label.setText(f"Recording saved to {filename}")
 
     def load_recording(self):
         filename, _ = QFileDialog.getOpenFileName(
@@ -696,9 +676,10 @@ class Tab2D(QWidget):
             self.btn_step.setEnabled(False)
             self.btn_play.setEnabled(False)
             self.btn_init.setEnabled(False)
+            self.btn_record.setEnabled(False)
 
             self.show_playback_step(0)
-            self.status_label.setText(f"Loaded recording: {self.recording.function_name}")
+            self.iter_label.setText(f"Loaded recording: {self.recording.function_name}")
 
     def show_playback_step(self, step):
         if not self.recording or step < 0 or step >= self.recording.total_steps:
@@ -708,8 +689,6 @@ class Tab2D(QWidget):
         if data:
             self.current_playback_step = step
             self.step_label.setText(f"Step: {step + 1}/{self.recording.total_steps}")
-
-
             self.update_playback_display(data)
 
     def update_playback_display(self, data):
@@ -725,7 +704,7 @@ class Tab2D(QWidget):
         best_x = best[self.selected_vars[0]]
         best_y = best[self.selected_vars[1]]
 
-        if hasattr(self, 'best_point'):
+        if self.best_point:
             self.plot_widget.removeItem(self.best_point)
 
         self.best_point = pg.ScatterPlotItem(
@@ -756,11 +735,67 @@ class Tab2D(QWidget):
         self.btn_step.setEnabled(True)
         self.btn_play.setEnabled(True)
         self.btn_init.setEnabled(True)
+        self.btn_record.setEnabled(True)
         self.step_label.setText("Step: 0/0")
 
-        if hasattr(self, 'best_point'):
+        if self.best_point:
             self.plot_widget.removeItem(self.best_point)
+            self.best_point = None
 
         if self.hba:
             self.update_population_plot()
             self.update_display()
+
+    def reset(self):
+        if self.is_animating:
+            self.toggle_animation()
+
+        self.hba = None
+        self.playback_mode = False
+        self.is_recording = False
+        self.btn_record.setText("● Record")
+        self.btn_record.setStyleSheet("color: red; font-weight: bold;")
+        self.btn_record.setEnabled(False)
+        self.btn_save_recording.setEnabled(False)
+        self.btn_prev.setEnabled(False)
+        self.btn_next.setEnabled(False)
+        self.btn_step.setEnabled(False)
+        self.btn_play.setEnabled(False)
+        self.btn_export.setEnabled(False)
+        self.btn_init.setEnabled(True)
+        self.step_label.setText("Step: 0/0")
+
+        if hasattr(self, 'population_scatter'):
+            self.population_scatter.setData([], [])
+        if self.best_point:
+            self.plot_widget.removeItem(self.best_point)
+            self.best_point = None
+        for line in self.trail_lines:
+            self.plot_widget.removeItem(line)
+        self.trail_lines = []
+        self.convergence_plot.clear()
+
+        self.iter_label.setText("Iteration: 0/0")
+        self.best_label.setText("Best Fitness: N/A")
+        self.solution_label.setText("Best Solution: N/A")
+        self.phase_label.setText("Phase: Not started")
+
+    def export_results(self):
+        if self.hba is None:
+            return
+
+        export_data = {
+            'function_name': self.func_name,
+            'bounds': self.bounds,
+            'optimum': self.optimum.tolist(),
+            'optimization_results': self.hba.get_optimization_history(),
+            'timestamp': datetime.now().isoformat(),
+            'selected_variables': self.selected_vars,
+            'fixed_values': self.fixed_values
+        }
+
+        filename = f"{self.func_name.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        DataExporter.export_to_json(export_data, filename, subfolder="benchmark_2d")
+
+    def on_tab_selected(self):
+        pass
