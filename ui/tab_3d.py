@@ -4,7 +4,7 @@ import numpy as np
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout,
                              QPushButton, QLabel, QSpinBox, QSlider,
                              QGroupBox, QComboBox, QGridLayout, QSplitter,
-                             QCheckBox, QLineEdit, QScrollArea)
+                             QCheckBox, QLineEdit, QScrollArea, QFileDialog)
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QFont
 import pyqtgraph.opengl as gl
@@ -12,6 +12,7 @@ import pyqtgraph.opengl as gl
 from core.export_data import DataExporter
 from core.functions import TEST_FUNCTIONS_2D, TEST_FUNCTIONS_3D, TEST_FUNCTIONS_5D
 from core.honey_badger import HoneyBadgerAlgorithm, HBAParams
+from core.recording import OptimizationRecording
 
 
 class VariableSlider3D(QWidget):
@@ -98,6 +99,11 @@ class Tab3D(QWidget):
         self.fixed_values = []
         self.selected_vars = [0, 1, 2]
 
+        self.recording = None
+        self.is_recording = False
+        self.playback_mode = False
+        self.current_playback_step = 0
+
         self.init_ui()
         self.setup_default_function()
 
@@ -183,8 +189,46 @@ class Tab3D(QWidget):
         self.speed_slider.valueChanged.connect(self.update_speed)
         layout.addWidget(self.speed_slider, btn_row, 6)
 
+        playback_row = 2
+        self.add_playback_controls(layout, playback_row, 0)
+
         panel.setLayout(layout)
         return panel
+
+    def add_playback_controls(self, layout, row, col):
+        self.btn_record = QPushButton("● Record")
+        self.btn_record.setStyleSheet("color: red; font-weight: bold;")
+        self.btn_record.clicked.connect(self.toggle_recording)
+        self.btn_record.setEnabled(False)
+        layout.addWidget(self.btn_record, row, col)
+        col += 1
+
+        self.btn_save_recording = QPushButton("💾 Save")
+        self.btn_save_recording.clicked.connect(self.save_recording)
+        self.btn_save_recording.setEnabled(False)
+        layout.addWidget(self.btn_save_recording, row, col)
+        col += 1
+
+        self.btn_load_recording = QPushButton("📂 Load")
+        self.btn_load_recording.clicked.connect(self.load_recording)
+        layout.addWidget(self.btn_load_recording, row, col)
+        col += 1
+
+        self.btn_prev = QPushButton("◀ Prev")
+        self.btn_prev.clicked.connect(self.prev_step)
+        self.btn_prev.setEnabled(False)
+        layout.addWidget(self.btn_prev, row, col)
+        col += 1
+
+        self.btn_next = QPushButton("Next ▶")
+        self.btn_next.clicked.connect(self.next_step)
+        self.btn_next.setEnabled(False)
+        layout.addWidget(self.btn_next, row, col)
+        col += 1
+
+        self.step_label = QLabel("Step: 0/0")
+        layout.addWidget(self.step_label, row, col)
+        col += 1
 
     def create_variable_panel(self):
         panel = QGroupBox("Variable Controls (Select 3 variables for 3D plot)")
@@ -243,13 +287,13 @@ class Tab3D(QWidget):
         cam_group.setLayout(cam_layout)
         layout.addWidget(cam_group)
 
-        cursor_group = QGroupBox("Current Constants")
-        cursor_layout = QVBoxLayout()
+        constants_group = QGroupBox("Fixed Variables")
+        constants_layout = QVBoxLayout()
         self.constants_label = QLabel("Fixed variables: None")
         self.constants_label.setWordWrap(True)
-        cursor_layout.addWidget(self.constants_label)
-        cursor_group.setLayout(cursor_layout)
-        layout.addWidget(cursor_group)
+        constants_layout.addWidget(self.constants_label)
+        constants_group.setLayout(constants_layout)
+        layout.addWidget(constants_group)
 
         layout.addStretch()
         return panel
@@ -336,8 +380,6 @@ class Tab3D(QWidget):
         for i, slider in enumerate(self.variable_sliders):
             if not slider.checkbox.isChecked():
                 self.fixed_values[i] = slider.get_value()
-            else:
-                pass
 
         self.update_constants_display()
         self.plot_function_surface()
@@ -494,7 +536,10 @@ class Tab3D(QWidget):
         self.btn_step.setEnabled(True)
         self.btn_play.setEnabled(True)
         self.btn_export.setEnabled(True)
+        self.btn_record.setEnabled(True)
         self.btn_init.setEnabled(False)
+
+        self.playback_mode = False
 
         for lines in self.trajectory_history:
             for line in lines:
@@ -505,6 +550,9 @@ class Tab3D(QWidget):
         self.update_3d_plot()
 
     def step_optimization(self):
+        if self.hba is None or self.playback_mode:
+            return
+
         if self.hba.current_iter >= self.hba.params.max_iter:
             if self.is_animating:
                 self.toggle_animation()
@@ -514,6 +562,14 @@ class Tab3D(QWidget):
             self.hba.previous_population = self.hba.population.copy()
 
         self.hba.run_one_iteration()
+
+        if self.is_recording and self.recording:
+            self.recording.record_step(
+                self.hba.population,
+                self.hba.best_solution,
+                self.hba.best_fitness
+            )
+
         self.update_3d_plot()
         self.update_display()
 
@@ -560,8 +616,8 @@ class Tab3D(QWidget):
                     self.gl_widget.addItem(line)
                     new_lines.append(line)
 
-                    if new_lines:
-                        self.trajectory_history.append(new_lines)
+            if new_lines:
+                self.trajectory_history.append(new_lines)
 
     def update_display(self):
         self.iter_label.setText(f"Iteration: {self.hba.current_iter}/{self.hba.params.max_iter}")
@@ -599,15 +655,135 @@ class Tab3D(QWidget):
         elif mode == 'iso':
             self.gl_widget.setCameraPosition(distance=80, elevation=30, azimuth=45)
 
+    def toggle_recording(self):
+        if not self.is_recording:
+            self.is_recording = True
+            self.btn_record.setText("◼ Stop")
+            self.btn_record.setStyleSheet("color: black; font-weight: bold;")
+            self.recording = OptimizationRecording()
+            self.recording.function_name = self.func_name
+            self.recording.function_dim = self.func_dim
+            self.recording.bounds = self.bounds
+            self.recording.selected_vars = self.selected_vars.copy()
+            self.recording.fixed_values = self.fixed_values.copy()
+            self.recording.timestamp = datetime.now().isoformat()
+
+            if self.hba and self.hba.population is not None:
+                self.recording.record_step(
+                    self.hba.population,
+                    self.hba.best_solution,
+                    self.hba.best_fitness
+                )
+        else:
+            self.is_recording = False
+            self.btn_record.setText("● Record")
+            self.btn_record.setStyleSheet("color: red; font-weight: bold;")
+            self.btn_save_recording.setEnabled(True)
+
+    def save_recording(self):
+        if self.recording and self.recording.total_steps > 0:
+            filename, _ = QFileDialog.getSaveFileName(
+                self, "Save Recording",
+                f"recording_{self.func_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                "JSON Files (*.json)"
+            )
+            if filename:
+                self.recording.save(filename)
+                self.iter_label.setText(f"Recording saved to {filename}")
+
+    def load_recording(self):
+        filename, _ = QFileDialog.getOpenFileName(
+            self, "Load Recording", "", "JSON Files (*.json)"
+        )
+        if filename:
+            self.recording = OptimizationRecording().load(filename)
+            self.playback_mode = True
+            self.current_playback_step = 0
+            self.btn_prev.setEnabled(True)
+            self.btn_next.setEnabled(True)
+            self.btn_step.setEnabled(False)
+            self.btn_play.setEnabled(False)
+            self.btn_init.setEnabled(False)
+            self.btn_record.setEnabled(False)
+
+            self.show_playback_step(0)
+            self.iter_label.setText(f"Loaded recording: {self.recording.function_name}")
+
+    def show_playback_step(self, step):
+        if not self.recording or step < 0 or step >= self.recording.total_steps:
+            return
+
+        data = self.recording.get_step(step)
+        if data:
+            self.current_playback_step = step
+            self.step_label.setText(f"Step: {step + 1}/{self.recording.total_steps}")
+            self.update_playback_display(data)
+
+    def update_playback_display(self, data):
+        if len(self.selected_vars) < 3:
+            return
+
+        pop = data['population']
+        pos = np.zeros((pop.shape[0], 3))
+        pos[:, 0] = pop[:, self.selected_vars[0]]
+        pos[:, 1] = pop[:, self.selected_vars[1]]
+        pos[:, 2] = pop[:, self.selected_vars[2]]
+        self.population_scatter.setData(pos=pos)
+
+        best = data['best_solution']
+        best_pos = np.array([[
+            best[self.selected_vars[0]],
+            best[self.selected_vars[1]],
+            best[self.selected_vars[2]]
+        ]])
+        self.best_scatter.setData(pos=best_pos)
+
+        self.iter_label.setText(f"Playback - Step: {data['step'] + 1}/{data['total_steps']}")
+        self.best_label.setText(f"Best Fitness: {data['best_fitness']:.6f}")
+
+        sol_str = ", ".join([f"{v:.4f}" for v in best[:5]])
+        self.solution_label.setText(f"Best Solution: [{sol_str}]")
+
+    def prev_step(self):
+        if self.playback_mode and self.current_playback_step > 0:
+            self.show_playback_step(self.current_playback_step - 1)
+
+    def next_step(self):
+        if self.playback_mode and self.current_playback_step < self.recording.total_steps - 1:
+            self.show_playback_step(self.current_playback_step + 1)
+
+    def exit_playback_mode(self):
+        self.playback_mode = False
+        self.btn_prev.setEnabled(False)
+        self.btn_next.setEnabled(False)
+        self.btn_step.setEnabled(True)
+        self.btn_play.setEnabled(True)
+        self.btn_init.setEnabled(True)
+        self.btn_record.setEnabled(True)
+        self.step_label.setText("Step: 0/0")
+
+        if self.hba:
+            self.update_3d_plot()
+            self.update_display()
+
     def reset(self):
         if self.is_animating:
             self.toggle_animation()
 
         self.hba = None
+        self.playback_mode = False
+        self.is_recording = False
+        self.btn_record.setText("● Record")
+        self.btn_record.setStyleSheet("color: red; font-weight: bold;")
+        self.btn_record.setEnabled(False)
+        self.btn_save_recording.setEnabled(False)
+        self.btn_prev.setEnabled(False)
+        self.btn_next.setEnabled(False)
         self.btn_step.setEnabled(False)
         self.btn_play.setEnabled(False)
         self.btn_export.setEnabled(False)
         self.btn_init.setEnabled(True)
+        self.step_label.setText("Step: 0/0")
 
         for lines in self.trajectory_history:
             for line in lines:
