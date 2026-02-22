@@ -1,5 +1,6 @@
 from datetime import datetime
-
+from core.recording import OptimizationRecording
+from PyQt6.QtWidgets import QFileDialog
 import numpy as np
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout,
                              QPushButton, QLabel, QSpinBox, QSlider,
@@ -22,6 +23,11 @@ class VariableSlider(QWidget):
         self.max_val = max_val
         self.parent_tab = parent_tab
         self.updating = False
+
+        self.recording = None
+        self.is_recording = False
+        self.playback_mode = False
+        self.current_playback_step = 0
 
         layout = QHBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
@@ -202,6 +208,10 @@ class Tab2D(QWidget):
         self.speed_slider.setValue(100)
         self.speed_slider.valueChanged.connect(self.update_speed)
         layout.addWidget(self.speed_slider, btn_row, 6)
+
+        # Add playback controls in a new row
+        playback_row = 2
+        self.add_playback_controls(layout, playback_row, 0)
 
         panel.setLayout(layout)
         return panel
@@ -452,6 +462,7 @@ class Tab2D(QWidget):
         self.btn_step.setEnabled(True)
         self.btn_play.setEnabled(True)
         self.btn_export.setEnabled(True)
+        self.btn_record.setEnabled(True)
         self.btn_init.setEnabled(False)
 
         self.convergence_plot.clear()
@@ -501,7 +512,7 @@ class Tab2D(QWidget):
         self.phase_label.setText(f"Phase: {phase}")
 
     def step_optimization(self):
-        if self.hba is None:
+        if self.hba is None or self.playback_mode:
             return
 
         if self.hba.current_iter >= self.hba.params.max_iter:
@@ -513,6 +524,13 @@ class Tab2D(QWidget):
             self.hba.previous_population = self.hba.population.copy()
 
         self.hba.run_one_iteration()
+
+        if self.is_recording and self.recording:
+            self.recording.record_step(
+                self.hba.population,
+                self.hba.best_solution,
+                self.hba.best_fitness
+            )
 
         self.update_population_plot()
         self.update_display()
@@ -544,13 +562,24 @@ class Tab2D(QWidget):
             self.toggle_animation()
 
         self.hba = None
+        self.playback_mode = False
+        self.is_recording = False
+        self.btn_record.setText("● Record")
+        self.btn_record.setStyleSheet("color: red; font-weight: bold;")
+        self.btn_record.setEnabled(False)
+        self.btn_save_recording.setEnabled(False)
+        self.btn_prev.setEnabled(False)
+        self.btn_next.setEnabled(False)
         self.btn_step.setEnabled(False)
         self.btn_play.setEnabled(False)
         self.btn_export.setEnabled(False)
         self.btn_init.setEnabled(True)
+        self.step_label.setText("Step: 0/0")
 
         if hasattr(self, 'population_scatter'):
             self.population_scatter.setData([], [])
+        if hasattr(self, 'best_point'):
+            self.plot_widget.removeItem(self.best_point)
         for line in self.trail_lines:
             self.plot_widget.removeItem(line)
         self.trail_lines = []
@@ -580,3 +609,158 @@ class Tab2D(QWidget):
 
     def on_tab_selected(self):
         pass
+
+    def add_playback_controls(self, layout, btn_row, next_col):
+        self.btn_record = QPushButton("● Record")
+        self.btn_record.setStyleSheet("color: red; font-weight: bold;")
+        self.btn_record.clicked.connect(self.toggle_recording)
+        self.btn_record.setEnabled(False)
+        layout.addWidget(self.btn_record, btn_row, next_col)
+        next_col += 1
+
+        self.btn_save_recording = QPushButton("💾 Save")
+        self.btn_save_recording.clicked.connect(self.save_recording)
+        self.btn_save_recording.setEnabled(False)
+        layout.addWidget(self.btn_save_recording, btn_row, next_col)
+        next_col += 1
+
+        self.btn_load_recording = QPushButton("📂 Load")
+        self.btn_load_recording.clicked.connect(self.load_recording)
+        layout.addWidget(self.btn_load_recording, btn_row, next_col)
+        next_col += 1
+
+        self.btn_prev = QPushButton("◀ Prev")
+        self.btn_prev.clicked.connect(self.prev_step)
+        self.btn_prev.setEnabled(False)
+        layout.addWidget(self.btn_prev, btn_row, next_col)
+        next_col += 1
+
+        self.btn_next = QPushButton("Next ▶")
+        self.btn_next.clicked.connect(self.next_step)
+        self.btn_next.setEnabled(False)
+        layout.addWidget(self.btn_next, btn_row, next_col)
+        next_col += 1
+
+        self.step_label = QLabel("Step: 0/0")
+        layout.addWidget(self.step_label, btn_row, next_col)
+        next_col += 1
+
+        return next_col
+
+    def toggle_recording(self):
+        if not self.is_recording:
+            self.is_recording = True
+            self.btn_record.setText("◼ Stop")
+            self.btn_record.setStyleSheet("color: black; font-weight: bold;")
+            self.recording = OptimizationRecording()
+            self.recording.function_name = self.func_name
+            self.recording.function_dim = self.func_dim
+            self.recording.bounds = self.bounds
+            self.recording.selected_vars = self.selected_vars.copy()
+            self.recording.fixed_values = self.fixed_values.copy()
+            self.recording.timestamp = datetime.now().isoformat()
+
+            if self.hba and self.hba.population is not None:
+                self.recording.record_step(
+                    self.hba.population,
+                    self.hba.best_solution,
+                    self.hba.best_fitness
+                )
+        else:
+            self.is_recording = False
+            self.btn_record.setText("● Record")
+            self.btn_record.setStyleSheet("color: red; font-weight: bold;")
+            self.btn_save_recording.setEnabled(True)
+
+    def save_recording(self):
+        if self.recording and self.recording.total_steps > 0:
+            filename, _ = QFileDialog.getSaveFileName(
+                self, "Save Recording",
+                f"recording_{self.func_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                "JSON Files (*.json)"
+            )
+            if filename:
+                self.recording.save(filename)
+                self.status_label.setText(f"Recording saved to {filename}")
+
+    def load_recording(self):
+        filename, _ = QFileDialog.getOpenFileName(
+            self, "Load Recording", "", "JSON Files (*.json)"
+        )
+        if filename:
+            self.recording = OptimizationRecording().load(filename)
+            self.playback_mode = True
+            self.current_playback_step = 0
+            self.btn_prev.setEnabled(True)
+            self.btn_next.setEnabled(True)
+            self.btn_step.setEnabled(False)
+            self.btn_play.setEnabled(False)
+            self.btn_init.setEnabled(False)
+
+            self.show_playback_step(0)
+            self.status_label.setText(f"Loaded recording: {self.recording.function_name}")
+
+    def show_playback_step(self, step):
+        if not self.recording or step < 0 or step >= self.recording.total_steps:
+            return
+
+        data = self.recording.get_step(step)
+        if data:
+            self.current_playback_step = step
+            self.step_label.setText(f"Step: {step + 1}/{self.recording.total_steps}")
+
+
+            self.update_playback_display(data)
+
+    def update_playback_display(self, data):
+        if len(self.selected_vars) < 2:
+            return
+
+        pop = data['population']
+        x = pop[:, self.selected_vars[0]]
+        y = pop[:, self.selected_vars[1]]
+        self.population_scatter.setData(x, y)
+
+        best = data['best_solution']
+        best_x = best[self.selected_vars[0]]
+        best_y = best[self.selected_vars[1]]
+
+        if hasattr(self, 'best_point'):
+            self.plot_widget.removeItem(self.best_point)
+
+        self.best_point = pg.ScatterPlotItem(
+            [best_x], [best_y],
+            pen=pg.mkPen('g', width=3), brush=pg.mkBrush('g'),
+            size=20, symbol='star'
+        )
+        self.plot_widget.addItem(self.best_point)
+
+        self.iter_label.setText(f"Playback - Step: {data['step'] + 1}/{data['total_steps']}")
+        self.best_label.setText(f"Best Fitness: {data['best_fitness']:.6f}")
+
+        sol_str = ", ".join([f"{v:.4f}" for v in best[:3]])
+        self.solution_label.setText(f"Best Solution: [{sol_str}]")
+
+    def prev_step(self):
+        if self.playback_mode and self.current_playback_step > 0:
+            self.show_playback_step(self.current_playback_step - 1)
+
+    def next_step(self):
+        if self.playback_mode and self.current_playback_step < self.recording.total_steps - 1:
+            self.show_playback_step(self.current_playback_step + 1)
+
+    def exit_playback_mode(self):
+        self.playback_mode = False
+        self.btn_prev.setEnabled(False)
+        self.btn_next.setEnabled(False)
+        self.btn_step.setEnabled(True)
+        self.btn_play.setEnabled(True)
+        self.btn_init.setEnabled(True)
+        self.step_label.setText("Step: 0/0")
+
+        if hasattr(self, 'best_point'):
+            self.plot_widget.removeItem(self.best_point)
+
+        if self.hba:
+            self.update_population_plot()
+            self.update_display()

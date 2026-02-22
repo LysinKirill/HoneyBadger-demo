@@ -552,7 +552,7 @@ class Tab3D(QWidget):
                         abs(y[i] - y_old) > 0.01 or
                         abs(z[i] - z_old) > 0.01):
                     line = gl.GLLinePlotItem(
-                        pos=np.array([x_old, y_old, z_old], [x[i], y[i], z[i]]),
+                        pos=np.array([[x_old, y_old, z_old], [x[i], y[i], z[i]]]),
                         color=(0, 0, 1, 0.3),
                         width=1,
                         antialias=True
