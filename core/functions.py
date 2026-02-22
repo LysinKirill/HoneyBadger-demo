@@ -6,24 +6,24 @@ FunctionInfo = Tuple[Callable[[npt.NDArray], float], Tuple[float, float], npt.ND
 
 
 def sphere(x: npt.NDArray) -> float:
-    """F1: Sphere function - Unimodal"""
+    """F1: Sphere function - Unimodal, works for any dimension"""
     return np.sum(x ** 2)
 
 
 def schwefel_222(x: npt.NDArray) -> float:
-    """F10: Schwefel 2.22 function - Unimodal"""
+    """F10: Schwefel 2.22 function - Unimodal, works for any dimension"""
     return np.sum(np.abs(x)) + np.prod(np.abs(x))
 
 
 def rastrigin(x: npt.NDArray) -> float:
-    """F11: Rastrigin function - Multimodal"""
+    """F11: Rastrigin function - Multimodal, works for any dimension"""
     A = 10
     n = len(x)
     return A * n + np.sum(x ** 2 - A * np.cos(2 * np.pi * x))
 
 
 def ackley(x: npt.NDArray) -> float:
-    """F14: Ackley function - Multimodal"""
+    """F14: Ackley function - Multimodal, works for any dimension"""
     a, b, c = 20, 0.2, 2 * np.pi
     d = len(x)
     sum1 = np.sum(x ** 2)
@@ -34,11 +34,10 @@ def ackley(x: npt.NDArray) -> float:
 
 
 def griewank(x: npt.NDArray) -> float:
-    """F15: Griewank function - Multimodal"""
+    """F15: Griewank function - Multimodal, works for any dimension"""
     sum_part = np.sum(x ** 2) / 4000
     prod_part = np.prod(np.cos(x / np.sqrt(np.arange(1, len(x) + 1))))
     return sum_part - prod_part + 1
-
 
 
 TEST_FUNCTIONS_2D = {
@@ -52,6 +51,14 @@ TEST_FUNCTIONS_3D = {
     'Sphere 3D': (sphere, (-100, 100), np.array([0, 0, 0])),
     'Rastrigin 3D': (rastrigin, (-5.12, 5.12), np.array([0, 0, 0])),
     'Ackley 3D': (ackley, (-32.768, 32.768), np.array([0, 0, 0])),
+    'Griewank 3D': (griewank, (-600, 600), np.array([0, 0, 0])),
+}
+
+TEST_FUNCTIONS_5D = {
+    'Sphere 5D': (sphere, (-100, 100), np.array([0, 0, 0, 0, 0])),
+    'Rastrigin 5D': (rastrigin, (-5.12, 5.12), np.array([0, 0, 0, 0, 0])),
+    'Ackley 5D': (ackley, (-32.768, 32.768), np.array([0, 0, 0, 0, 0])),
+    'Griewank 5D': (griewank, (-600, 600), np.array([0, 0, 0, 0, 0])),
 }
 
 
