@@ -16,8 +16,6 @@ def setup_directories():
     for directory in directories:
         Path(directory).mkdir(parents=True, exist_ok=True)
 
-    print(f"Created directory structure in: {Path('iodata').absolute()}")
-
 
 def main():
     setup_directories()
